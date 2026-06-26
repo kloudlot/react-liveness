@@ -246,7 +246,7 @@ export function LivenessCheck({
       {/* Camera */}
       <div style={{ position: 'relative', background: '#000', lineHeight: 0 }}>
         <video
-          ref={videoRef}
+          ref={videoRef as any}
           width={VIDEO_W}
           height={VIDEO_H}
           style={{
