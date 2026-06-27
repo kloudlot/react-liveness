@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useCamera } from "../hooks/useCamera";
 import { useFaceLandmarker } from "../hooks/useFaceLandmarker";
 import {
@@ -24,11 +24,10 @@ import {
   Lock,
 } from "lucide-react";
 
-
 const VIDEO_W = 480;
 const VIDEO_H = 360;
 
-interface LivenessTheme {
+export interface LivenessTheme {
   primary?: string;
   success?: string;
   danger?: string;
@@ -39,7 +38,272 @@ interface LivenessTheme {
   border?: string;
 }
 
-interface LivenessCheckProps {
+export interface LivenessStyles {
+  root?: React.CSSProperties;
+  header?: React.CSSProperties;
+  titleGroup?: React.CSSProperties;
+  title?: React.CSSProperties;
+  subtitle?: React.CSSProperties;
+  secureBadge?: React.CSSProperties;
+  errorBanner?: React.CSSProperties;
+  cameraShell?: React.CSSProperties;
+  cameraFrame?: React.CSSProperties;
+  video?: React.CSSProperties;
+  faceGuide?: React.CSSProperties;
+  idleOverlay?: React.CSSProperties;
+  loadingOverlay?: React.CSSProperties;
+  resultOverlay?: React.CSSProperties;
+  warningPill?: React.CSSProperties;
+  capturedThumb?: React.CSSProperties;
+  progressWrapper?: React.CSSProperties;
+  progressTrack?: React.CSSProperties;
+  progressFill?: React.CSSProperties;
+  challengePills?: React.CSSProperties;
+  challengePill?: React.CSSProperties;
+  instructionCard?: React.CSSProperties;
+  instructionIcon?: React.CSSProperties;
+  instructionText?: React.CSSProperties;
+  actionWrapper?: React.CSSProperties;
+  actionButton?: React.CSSProperties;
+  resultList?: React.CSSProperties;
+  resultPill?: React.CSSProperties;
+}
+
+const defaultStyles: LivenessStyles = {
+  root: {
+    width: "100%",
+    maxWidth: 560,
+    margin: "auto",
+    background: "var(--live-surface, #ffffff)",
+    border: "1px solid var(--live-border, #e2e8f0)",
+    borderRadius: 28,
+    overflow: "hidden",
+    boxShadow: "0 20px 60px rgba(15, 23, 42, 0.08)",
+    fontFamily: "Inter, system-ui, sans-serif",
+    position: "relative",
+  },
+  header: {
+    padding: "20px 24px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  titleGroup: {
+    display: "flex",
+    gap: 14,
+    alignItems: "center",
+  },
+  title: {
+    margin: 0,
+    fontSize: 18,
+    color: "var(--live-text, #0f172a)",
+  },
+  subtitle: {
+    margin: 0,
+    color: "#64748b",
+    fontSize: 13,
+  },
+  secureBadge: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "#eff6ff",
+    color: "var(--live-primary, #2563eb)",
+    padding: "8px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+  },
+  errorBanner: {
+    padding: "12px 20px",
+    margin: "0 20px 16px",
+    background: "rgba(220, 38, 38, 0.1)",
+    border: "1px solid rgba(220, 38, 38, 0.2)",
+    borderRadius: 12,
+    color: "var(--live-danger, #dc2626)",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 14,
+  },
+  cameraShell: {
+    padding: 24,
+    background: "var(--live-bg, #f8fafc)",
+  },
+  cameraFrame: {
+    position: "relative",
+    aspectRatio: "4 / 3",
+    background: "black",
+    borderRadius: 28,
+    overflow: "hidden",
+  },
+  video: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    transform: "scaleX(-1)",
+  },
+  faceGuide: {
+    position: "absolute",
+    inset: "50%",
+    width: 220,
+    height: 280,
+    borderRadius: "50%",
+    border: "4px solid rgba(255, 255, 255, 0.7)",
+    transform: "translate(-50%, -50%)",
+    transition: "border-color 0.3s ease",
+  },
+  idleOverlay: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    gap: 16,
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "white",
+    background: "rgba(15, 23, 42, 0.75)",
+  },
+  loadingOverlay: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    gap: 16,
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "white",
+    background: "rgba(15, 23, 42, 0.75)",
+  },
+  warningPill: {
+    position: "absolute",
+    bottom: 18,
+    left: "50%",
+    transform: "translateX(-50%)",
+    display: "flex",
+    gap: 8,
+    padding: "10px 16px",
+    borderRadius: 999,
+    background: "rgba(0,0,0,0.72)",
+    color: "white",
+    fontSize: 13,
+  },
+  resultOverlay: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    gap: 16,
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "white",
+  },
+  capturedThumb: {
+    position: "absolute",
+    bottom: 16,
+    right: 16,
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    overflow: "hidden",
+    border: "2px solid white",
+  },
+  progressWrapper: {},
+  progressTrack: {
+    height: 8,
+    margin: "0 20px 20px",
+    background: "var(--live-border, #e2e8f0)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    background: "var(--live-primary, #2563eb)",
+    transition: "width 0.1s linear",
+  },
+  challengePills: {
+    display: "flex",
+    gap: 8,
+    justifyContent: "center",
+    padding: "0 20px 16px",
+  },
+  challengePill: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    background: "var(--live-surface, #ffffff)",
+    border: "2px solid var(--live-border, #e2e8f0)",
+    color: "var(--live-text, #0f172a)",
+    transition: "all 0.2s",
+  },
+  instructionCard: {
+    margin: "0 20px 20px",
+    padding: 18,
+    borderRadius: 20,
+    border: "1px solid var(--live-border, #e2e8f0)",
+    display: "flex",
+    gap: 16,
+    alignItems: "center",
+    background: "var(--live-surface, #ffffff)",
+  },
+  instructionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    background: "rgba(37, 99, 235, 0.1)",
+    display: "grid",
+    placeItems: "center",
+    color: "var(--live-primary, #2563eb)",
+  },
+  instructionText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  actionWrapper: {
+    padding: "0 20px 20px",
+  },
+  actionButton: {
+    width: "100%",
+    height: 52,
+    border: "none",
+    borderRadius: 16,
+    background: "var(--live-primary, #2563eb)",
+    color: "white",
+    fontSize: 15,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  resultList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    padding: "0 20px 20px",
+  },
+  resultPill: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 16px",
+    borderRadius: 12,
+    fontSize: 14,
+    fontWeight: 600,
+  },
+};
+
+const INJECTED_STYLES = `
+  @keyframes liveness-spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes liveness-pulse {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.03); }
+  }
+`;
+
+export interface LivenessCheckProps {
   onComplete?: (
     passed: boolean,
     results: ChallengeResult[],
@@ -47,12 +311,14 @@ interface LivenessCheckProps {
   ) => void;
   className?: string;
   theme?: LivenessTheme;
+  styles?: LivenessStyles;
 }
 
 export function LivenessCheck({
   onComplete,
   className,
   theme,
+  styles: customStyles,
 }: LivenessCheckProps) {
   const {
     videoRef,
@@ -94,16 +360,9 @@ export function LivenessCheck({
   const currentIndexRef = useRef(0);
   const statusRef = useRef<ChallengeStatus>("idle");
   const challengesRef = useRef<Challenge[]>([]);
-  // Ref-tracked results so advanceChallenge always reads the latest list
-  // without needing results in its dependency array (which would cause stale
-  // closures or re-registration of the RAF loop on every result append).
   const resultsRef = useRef<ChallengeResult[]>([]);
-  // Guards against advanceChallenge firing multiple times per challenge.
-  // statusRef alone can't guard this because setStatus is async — the ref
-  // stays 'detecting' during the 800ms pass-delay while the RAF loop keeps running.
   const advancingRef = useRef(false);
 
-  // Keep refs in sync with state
   useEffect(() => {
     currentIndexRef.current = currentIndex;
   }, [currentIndex]);
@@ -167,6 +426,7 @@ export function LivenessCheck({
             const sessionPassed = allResults.every((r) => r.passed);
             setStatus(sessionPassed ? "complete" : "failed");
             statusRef.current = sessionPassed ? "complete" : "failed";
+            
             if (sessionPassed) {
               audio.announceComplete();
               // Capture the frame right now while the video is still live
@@ -335,28 +595,59 @@ export function LivenessCheck({
   const isDone = isComplete || isFailed;
   const isActive = status === "detecting" || status === "waiting";
   const currentChallenge = challenges[currentIndex];
-
   const allPassed = isDone && results.every((r) => r.passed);
-
   const progressPct = currentChallenge
     ? ((currentChallenge.timeoutMs - timeRemaining) /
-        currentChallenge.timeoutMs) *
-      100
+        currentChallenge.timeoutMs) * 100
     : 0;
 
+  // Compute merged styles
+  const mergedStyles = {
+    root: { ...defaultStyles.root, ...customStyles?.root },
+    header: { ...defaultStyles.header, ...customStyles?.header },
+    titleGroup: { ...defaultStyles.titleGroup, ...customStyles?.titleGroup },
+    title: { ...defaultStyles.title, ...customStyles?.title },
+    subtitle: { ...defaultStyles.subtitle, ...customStyles?.subtitle },
+    secureBadge: { ...defaultStyles.secureBadge, ...customStyles?.secureBadge },
+    errorBanner: { ...defaultStyles.errorBanner, ...customStyles?.errorBanner },
+    cameraShell: { ...defaultStyles.cameraShell, ...customStyles?.cameraShell },
+    cameraFrame: { ...defaultStyles.cameraFrame, ...customStyles?.cameraFrame },
+    video: { ...defaultStyles.video, ...customStyles?.video },
+    faceGuide: { ...defaultStyles.faceGuide, ...customStyles?.faceGuide },
+    idleOverlay: { ...defaultStyles.idleOverlay, ...customStyles?.idleOverlay },
+    loadingOverlay: { ...defaultStyles.loadingOverlay, ...customStyles?.loadingOverlay },
+    resultOverlay: { ...defaultStyles.resultOverlay, ...customStyles?.resultOverlay },
+    warningPill: { ...defaultStyles.warningPill, ...customStyles?.warningPill },
+    capturedThumb: { ...defaultStyles.capturedThumb, ...customStyles?.capturedThumb },
+    progressWrapper: { ...defaultStyles.progressWrapper, ...customStyles?.progressWrapper },
+    progressTrack: { ...defaultStyles.progressTrack, ...customStyles?.progressTrack },
+    progressFill: { ...defaultStyles.progressFill, ...customStyles?.progressFill },
+    challengePills: { ...defaultStyles.challengePills, ...customStyles?.challengePills },
+    challengePill: { ...defaultStyles.challengePill, ...customStyles?.challengePill },
+    instructionCard: { ...defaultStyles.instructionCard, ...customStyles?.instructionCard },
+    instructionIcon: { ...defaultStyles.instructionIcon, ...customStyles?.instructionIcon },
+    instructionText: { ...defaultStyles.instructionText, ...customStyles?.instructionText },
+    actionWrapper: { ...defaultStyles.actionWrapper, ...customStyles?.actionWrapper },
+    actionButton: { ...defaultStyles.actionButton, ...customStyles?.actionButton },
+    resultList: { ...defaultStyles.resultList, ...customStyles?.resultList },
+    resultPill: { ...defaultStyles.resultPill, ...customStyles?.resultPill },
+  };
+
   return (
-    <div className={`liveness-root ${className || ""}`} style={themeVars}>
+    <div className={className} style={{ ...themeVars, ...mergedStyles.root }}>
+      <style>{INJECTED_STYLES}</style>
+
       {/* Header */}
-      <header className="liveness-header">
-        <div className="title-group">
+      <header style={mergedStyles.header}>
+        <div style={mergedStyles.titleGroup}>
           <ShieldCheck size={22} />
           <div>
-            <h3>Liveness Verification</h3>
-            <p>Biometric identity confirmation</p>
+            <h3 style={mergedStyles.title}>Liveness Verification</h3>
+            <p style={mergedStyles.subtitle}>Biometric identity confirmation</p>
           </div>
         </div>
 
-        <div className="secure-badge">
+        <div style={mergedStyles.secureBadge}>
           <Lock size={14} />
           Secure
         </div>
@@ -364,21 +655,21 @@ export function LivenessCheck({
 
       {/* Errors */}
       {(cameraError || modelError) && (
-        <div className="error-banner">
+        <div style={mergedStyles.errorBanner}>
           <AlertTriangle size={16} />
           <span>{cameraError || modelError}</span>
         </div>
       )}
 
       {/* Camera Section */}
-      <section className="camera-shell">
-        <div className="camera-frame">
+      <section style={mergedStyles.cameraShell}>
+        <div style={mergedStyles.cameraFrame}>
           {/* Video */}
           <video
             ref={videoRef}
             width={VIDEO_W}
             height={VIDEO_H}
-            className="camera-video"
+            style={mergedStyles.video}
             playsInline
             muted
           />
@@ -386,26 +677,28 @@ export function LivenessCheck({
           {/* Face guide */}
           {(isActive || isDone) && (
             <div
-              className={`face-guide ${
-                faceDetected ? "detected" : ""
-              } ${challengePassed ? "passed" : ""}`}
+              style={{
+                ...mergedStyles.faceGuide,
+                ...(faceDetected ? { borderColor: "var(--live-success, #22c55e)", animation: "liveness-pulse 1.5s infinite" } : {}),
+                ...(challengePassed ? { borderColor: "var(--live-success, #22c55e)", backgroundColor: "rgba(34, 197, 94, 0.15)" } : {}),
+              }}
             />
           )}
 
           {/* Idle overlay */}
           {status === "idle" && (
-            <div className="idle-overlay">
+            <div style={mergedStyles.idleOverlay}>
               <Camera size={56} />
-              <h3>Camera Required</h3>
-              <p>Allow camera access to start verification</p>
+              <h3 style={{ margin: 0 }}>Camera Required</h3>
+              <p style={{ margin: 0, opacity: 0.8 }}>Allow camera access to start verification</p>
             </div>
           )}
 
           {/* Loading overlay */}
           {status === "waiting" && (
-            <div className="loading-overlay">
-              <LoaderCircle size={48} className="spin" />
-              <p>
+            <div style={mergedStyles.loadingOverlay}>
+              <LoaderCircle size={48} style={{ animation: "liveness-spin 1s linear infinite" }} />
+              <p style={{ margin: 0 }}>
                 {!isCameraReady
                   ? "Starting camera..."
                   : "Preparing face detection..."}
@@ -415,30 +708,30 @@ export function LivenessCheck({
 
           {/* Warning */}
           {status === "detecting" && !faceDetected && (
-            <div className="warning-pill">
-              <AlertTriangle size={14} />
+            <div style={mergedStyles.warningPill}>
+              <AlertTriangle size={14} color="var(--live-warning, #f59e0b)" />
               Center your face in the frame
             </div>
           )}
 
           {/* Success / Fail Overlay */}
           {isDone && (
-            <div className="result-overlay">
+            <div style={{ ...mergedStyles.resultOverlay, background: allPassed ? "rgba(22, 163, 74, 0.9)" : "rgba(220, 38, 38, 0.9)" }}>
               {allPassed ? <CircleCheckBig size={72} /> : <CircleX size={72} />}
 
-              <h2>
+              <h2 style={{ margin: 0 }}>
                 {allPassed ? "Verification Successful" : "Verification Failed"}
               </h2>
 
-              <p>
+              <p style={{ margin: 0, opacity: 0.9 }}>
                 {allPassed
                   ? `${results.length} challenges completed`
                   : "Some challenges were not completed"}
               </p>
 
               {capturedFrame && (
-                <div className="captured-thumb">
-                  <img src={capturedFrame.dataUrl} alt="Captured" />
+                <div style={mergedStyles.capturedThumb}>
+                  <img src={capturedFrame.dataUrl} alt="Captured" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 </div>
               )}
             </div>
@@ -448,12 +741,12 @@ export function LivenessCheck({
 
       {/* Progress */}
       {isActive && (
-        <div className="progress-wrapper">
-          <div className="progress-track">
+        <div style={mergedStyles.progressWrapper}>
+          <div style={mergedStyles.progressTrack}>
             <div
-              className="progress-fill"
               style={{
-                width: `${progressPct}%`,
+                ...mergedStyles.progressFill,
+                width: `${progressPct}`
               }}
             />
           </div>
@@ -462,21 +755,28 @@ export function LivenessCheck({
 
       {/* Challenge Pills */}
       {challenges.length > 0 && (
-        <div className="challenge-pills">
+        <div style={mergedStyles.challengePills}>
           {challenges.map((challenge, i) => {
             const done = i < currentIndex;
             const active = i === currentIndex;
             const res = results[i];
 
+            let dynamicPillStyle: React.CSSProperties = {};
+            if (res?.passed) {
+              dynamicPillStyle = { background: "rgba(22, 163, 74, 0.15)", borderColor: "rgba(22, 163, 74, 0.4)", color: "var(--live-success, #16a34a)" };
+            } else if (done && !res?.passed) {
+              dynamicPillStyle = { background: "rgba(220, 38, 38, 0.15)", borderColor: "rgba(220, 38, 38, 0.4)", color: "var(--live-danger, #dc2626)" };
+            } else if (active) {
+              dynamicPillStyle = { background: "rgba(37, 99, 235, 0.15)", borderColor: "rgba(37, 99, 235, 0.4)", color: "var(--live-primary, #2563eb)" };
+            }
+
             return (
               <div
                 key={i}
-                className={`challenge-pill
-                ${done ? "done" : ""}
-                ${active ? "active" : ""}
-                ${res?.passed ? "passed" : ""}
-                ${res && !res.passed ? "failed" : ""}
-              `}
+                style={{
+                  ...mergedStyles.challengePill,
+                  ...dynamicPillStyle,
+                }}
               >
                 <span>{challenge.icon}</span>
               </div>
@@ -487,14 +787,14 @@ export function LivenessCheck({
 
       {/* Instruction Card */}
       {isActive && currentChallenge && status === "detecting" && (
-        <div className="instruction-card">
-          <div className="instruction-icon">
+        <div style={mergedStyles.instructionCard} key={instructionKey}>
+          <div style={mergedStyles.instructionIcon}>
             <ScanFace size={24} />
           </div>
 
-          <div className="instruction-text">
-            <h4>{currentChallenge.instruction}</h4>
-            <p>
+          <div style={mergedStyles.instructionText}>
+            <h4 style={{ margin: 0, fontSize: 16 }}>{currentChallenge.instruction}</h4>
+            <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>
               Step {currentIndex + 1} of {challenges.length}
             </p>
           </div>
@@ -503,8 +803,8 @@ export function LivenessCheck({
 
       {/* Idle CTA */}
       {status === "idle" && (
-        <div className="action-wrapper">
-          <button className="action-button" onClick={handleStart}>
+        <div style={mergedStyles.actionWrapper}>
+          <button style={mergedStyles.actionButton} onClick={handleStart}>
             Start Verification
           </button>
         </div>
@@ -512,8 +812,8 @@ export function LivenessCheck({
 
       {/* Done CTA */}
       {isDone && (
-        <div className="action-wrapper">
-          <button className="action-button" onClick={handleReset}>
+        <div style={mergedStyles.actionWrapper}>
+          <button style={mergedStyles.actionButton} onClick={handleReset}>
             {allPassed ? "Done" : "Try Again"}
           </button>
         </div>
@@ -521,13 +821,20 @@ export function LivenessCheck({
 
       {/* Challenge Result Summary */}
       {isDone && (
-        <div className="result-list">
+        <div style={mergedStyles.resultList}>
           {results.map((result, idx) => (
             <div
               key={idx}
-              className={`result-pill ${result.passed ? "success" : "fail"}`}
+              style={{
+                ...mergedStyles.resultPill,
+                background: result.passed ? "rgba(22, 163, 74, 0.1)" : "rgba(220, 38, 38, 0.1)",
+                color: result.passed ? "var(--live-success, #16a34a)" : "var(--live-danger, #dc2626)",
+              }}
             >
-              <span>{challenges[idx]?.icon}</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span>{challenges[idx]?.icon}</span>
+                <span>{challenges[idx]?.label || challenges[idx]?.type}</span>
+              </div>
 
               <span>
                 {result.passed
@@ -541,3 +848,4 @@ export function LivenessCheck({
     </div>
   );
 }
+
