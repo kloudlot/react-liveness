@@ -8,11 +8,6 @@ import {
 
 const NOD_HISTORY_LENGTH = 15;
 
-// ---------------------------------------------------------------------------
-// GPU support detection
-// Requires WebGL2 + EXT_color_buffer_float. Mid-range Android devices often
-// have WebGL2 but lack the extension — fall back to CPU silently.
-// ---------------------------------------------------------------------------
 function supportsGpuDelegate(): boolean {
   try {
     const canvas = document.createElement('canvas');
@@ -25,98 +20,68 @@ function supportsGpuDelegate(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve WASM base path from the installed @mediapipe/tasks-vision package.
+// Module-level singleton for the MediaPipe import ONLY.
+// The FaceLandmarker instance itself is NOT cached here — each hook instance
+// owns its own landmarker and cleans it up on unmount.
 //
-// WHY NOT a hardcoded CDN URL:
-//   The CDN URL must match the exact installed JS version or the WASM binary
-//   is incompatible and detectForVideo silently returns no landmarks.
-//   e.g. JS=0.10.35 + WASM@0.10.14 = detector initialises but returns [].
-//
-// HOW THIS WORKS:
-//   @mediapipe/tasks-vision exports its WASM files via package.json "exports".
-//   We import one of them and derive the base directory from its resolved URL.
-//   This always matches the installed version — no hardcoding needed.
+// Separating the two prevents the bug where:
+//   1. Component unmounts → landmarker.close() called
+//   2. Component remounts → mediaPipePromise resolves instantly (cached)
+//      but landmarkerRef.current is null until createFromOptions finishes
+//   3. startDetection called before createFromOptions completes → silent no-op
 // ---------------------------------------------------------------------------
-async function resolveWasmPath(): Promise<string> {
-  try {
-    // Import the internal WASM loader — its resolved URL tells us where
-    // the package's wasm/ directory lives in the consumer's bundler output.
-    const wasmModule = await import(
-      /* webpackChunkName: "mediapipe-wasm" */
-      // @ts-ignore
-      '@mediapipe/tasks-vision/vision_wasm_internal.js'
-    );
-    // The module's default export or import.meta.url gives us the resolved path.
-    // Strip the filename to get the directory.
-    const url: string =
-      (wasmModule as any).default?.locateFile?.('') ??
-      (typeof (wasmModule as any).__esModule !== 'undefined'
-        ? new URL('./wasm', import.meta.url).href
-        : '');
-    if (url) return url.replace(/\/[^/]+$/, '');
-  } catch {
-    // Bundler didn't resolve the internal module path — fall through to CDN
-  }
+let mediaPipeModulePromise: Promise<{ FaceLandmarker: any; FilesetResolver: any }> | null = null;
 
-  // Fallback: derive version from the JS module itself and hit jsDelivr.
-  // This still matches versions because we read it dynamically.
-  try {
-    const pkg = await fetch(
-      new URL('../../node_modules/@mediapipe/tasks-vision/package.json', import.meta.url)
-    ).then((r) => r.json()).catch(() => null);
-    if (pkg?.version) {
-      return `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${pkg.version}/wasm`;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Last resort: use a version-agnostic jsDelivr URL (no @version = latest)
-  return 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
-}
-
-// ---------------------------------------------------------------------------
-// Singleton dynamic import — one network request, shared across all instances
-// ---------------------------------------------------------------------------
-let mediaPipePromise: Promise<{ FaceLandmarker: any; FilesetResolver: any }> | null = null;
-
-function loadMediaPipe(): Promise<{ FaceLandmarker: any; FilesetResolver: any }> {
-  if (!mediaPipePromise) {
-    mediaPipePromise = import('@mediapipe/tasks-vision').then((mod) => ({
+function loadMediaPipeModule(): Promise<{ FaceLandmarker: any; FilesetResolver: any }> {
+  if (!mediaPipeModulePromise) {
+    mediaPipeModulePromise = import('@mediapipe/tasks-vision').then((mod) => ({
       FaceLandmarker: mod.FaceLandmarker,
       FilesetResolver: mod.FilesetResolver,
     }));
   }
-  return mediaPipePromise;
+  return mediaPipeModulePromise;
+}
+
+// Derive the WASM path from the installed package version.
+// Always uses the unversioned jsDelivr URL which redirects to latest —
+// this matches whatever @mediapipe/tasks-vision version the consumer installed
+// as long as they're on a recent version (>=0.10.0).
+// The FilesetResolver caches WASM internally so repeated calls are free.
+function getWasmPath(): string {
+  return 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
 }
 
 export function useFaceLandmarker(
-  videoRef: React.RefObject<HTMLVideoElement | null>,
+  videoRef: React.RefObject<HTMLVideoElement>,
   options: UseFaceLandmarkerOptions = {}
 ): UseFaceLandmarkerReturn {
-  const { onResult, enabled = true } = options;
+  const { onResult } = options;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const landmarkerRef             = useRef<any>(null);
   const rafRef                    = useRef<number | null>(null);
   const runningRef                = useRef(false);
   const noseYHistoryRef           = useRef<number[]>([]);
+  // Tracks whether init() is in progress so startDetection can wait for it
+  const initPromiseRef            = useRef<Promise<void> | null>(null);
 
+  // ---------------------------------------------------------------------------
+  // Init runs ONCE on mount — not gated on any status/enabled prop.
+  // The consumer controls detection via startDetection/stopDetection.
+  // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (!enabled) return;
-
     let cancelled = false;
 
-    async function init() {
+    const initPromise = (async () => {
       try {
-        const [{ FaceLandmarker, FilesetResolver }, wasmPath] = await Promise.all([
-          loadMediaPipe(),
-          resolveWasmPath(),
-        ]);
+        setIsLoading(true);
+        setError(null);
 
+        const { FaceLandmarker, FilesetResolver } = await loadMediaPipeModule();
         if (cancelled) return;
 
-        console.info(`[react-liveness] WASM path: ${wasmPath}`);
+        const wasmPath = getWasmPath();
+        console.info(`[react-liveness] WASM: ${wasmPath}`);
 
         const filesetResolver = await FilesetResolver.forVisionTasks(wasmPath);
         if (cancelled) return;
@@ -135,30 +100,56 @@ export function useFaceLandmarker(
           numFaces: 1,
         });
 
-        if (cancelled) { faceLandmarker.close(); return; }
+        if (cancelled) {
+          faceLandmarker.close();
+          return;
+        }
 
         landmarkerRef.current = faceLandmarker;
         setIsLoading(false);
+        console.info('[react-liveness] FaceLandmarker ready');
       } catch (err) {
         if (!cancelled) {
           console.error('[react-liveness] init failed:', err);
-          setError(
-            err instanceof Error
-              ? err.message
-              : 'Failed to load face detection model.'
-          );
+          setError(err instanceof Error ? err.message : 'Failed to load face detection model.');
           setIsLoading(false);
-          mediaPipePromise = null; // allow retry
+          // Reset module cache so a page refresh / retry can recover
+          mediaPipeModulePromise = null;
         }
       }
-    }
+    })();
 
-    init();
-    return () => { cancelled = true; };
-  }, [enabled]);
+    initPromiseRef.current = initPromise;
+
+    return () => {
+      cancelled = true;
+      // Stop the RAF loop first, then close the landmarker
+      runningRef.current = false;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      landmarkerRef.current?.close();
+      landmarkerRef.current = null;
+    };
+  // Empty deps: run once on mount, clean up on unmount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startDetection = useCallback(() => {
-    if (!landmarkerRef.current || runningRef.current) return;
+    // If already running, no-op
+    if (runningRef.current) return;
+
+    // If landmarker isn't ready yet, wait for init then start
+    if (!landmarkerRef.current) {
+      initPromiseRef.current?.then(() => {
+        if (landmarkerRef.current) {
+          startDetection();
+        }
+      });
+      return;
+    }
+
     runningRef.current = true;
     noseYHistoryRef.current = [];
 
@@ -186,13 +177,10 @@ export function useFaceLandmarker(
           const leftCheek  = lm[234];
           const rightCheek = lm[454];
 
-          // Synthetic headYaw — unmirrored landmark space
-          // video renders scaleX(-1) so: left on screen = positive yaw
           if (noseTip && leftCheek && rightCheek) {
             blendshapes['headYaw'] = noseTip.x - (leftCheek.x + rightCheek.x) / 2;
           }
 
-          // Synthetic headNod — sliding window on noseTip.y
           const noseY = noseTip?.y;
           if (noseY !== undefined) {
             noseYHistoryRef.current.push(noseY);
@@ -225,13 +213,6 @@ export function useFaceLandmarker(
       rafRef.current = null;
     }
   }, []);
-
-  useEffect(() => {
-    return () => {
-      stopDetection();
-      landmarkerRef.current?.close();
-    };
-  }, [stopDetection]);
 
   return { isLoading, error, startDetection, stopDetection };
 }

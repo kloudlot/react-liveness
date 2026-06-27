@@ -1,5 +1,3 @@
-'use client';
-
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
@@ -151,7 +149,7 @@ export function LivenessCheck({
   );
 
   const { isLoading: isModelLoading, error: modelError, startDetection, stopDetection } =
-    useFaceLandmarker(videoRef, { onResult: handleResult, enabled: status !== 'idle' });
+    useFaceLandmarker(videoRef, { onResult: handleResult });
 
   const handleStart = useCallback(async () => {
     const picked = challengesProp ?? pickChallenges(challengeCount);
@@ -170,11 +168,11 @@ export function LivenessCheck({
   }, [startCamera, challengesProp, challengeCount]);
 
   useEffect(() => {
-    if (isCameraReady && !isModelLoading && status === 'waiting') {
+    if (isCameraReady && status === 'waiting') {
       startDetection();
       startChallenge(0);
     }
-  }, [isCameraReady, isModelLoading, status, startDetection, startChallenge]);
+  }, [isCameraReady, status, startDetection, startChallenge]);
 
   const handleReset = useCallback(() => {
     clearTimer();
@@ -246,7 +244,7 @@ export function LivenessCheck({
       {/* Camera */}
       <div style={{ position: 'relative', background: '#000', lineHeight: 0 }}>
         <video
-          ref={videoRef as any}
+          ref={videoRef}
           width={VIDEO_W}
           height={VIDEO_H}
           style={{

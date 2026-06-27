@@ -84,7 +84,6 @@ export interface FaceLandmarkerResult {
 
 export interface UseFaceLandmarkerOptions {
   onResult?: (result: FaceLandmarkerResult) => void;
-  enabled?: boolean;
 }
 
 export interface UseFaceLandmarkerReturn {
@@ -95,7 +94,7 @@ export interface UseFaceLandmarkerReturn {
 }
 
 export interface UseCameraReturn {
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  videoRef: React.RefObject<HTMLVideoElement>;
   isCameraReady: boolean;
   error: string | null;
   startCamera: () => Promise<void>;
