@@ -22,7 +22,6 @@ import { LivenessCheck } from '@kloudlot/react-liveness';
 export default function AttendancePage() {
   return (
     <LivenessCheck
-      challengeCount={3}
       onComplete={(passed, results, frame) => {
         if (passed && frame) {
           // Upload photo to your backend
@@ -46,10 +45,51 @@ export default function AttendancePage() {
 | Prop | Type | Default | Description |
 |---|---|---|---|
 | `onComplete` | `(passed, results, frame?) => void` | — | Called when session ends |
-| `challenges` | `Challenge[]` | random 3 | Override the challenge set entirely |
-| `challengeCount` | `number` | `3` | How many challenges to pick from the default set |
-| `muted` | `boolean` | `false` | Disable voice + audio feedback |
+| `theme` | `LivenessTheme` | — | High-level color theming (primary, success, danger, surface, text, etc.) |
+| `styles` | `LivenessStyles` | — | Overrides for specific internal DOM elements |
 | `className` | `string` | — | CSS class on the root container |
+| `numberOfChallenge` | `number` | `3` | How many challenges to present to the user |
+| `challengePool` | `Challenge[]` | Default set | Override the pool of challenges to pick from |
+
+---
+
+## Customization (Theming & Styling)
+
+The `LivenessCheck` component provides rich customization out of the box.
+
+### Theme Prop (Quick Colors)
+
+Pass an object to `theme={...}` to override the main color palette using CSS variables.
+
+```tsx
+<LivenessCheck
+  theme={{
+    primary: '#6366f1', // Indigo
+    success: '#22c55e', // Green
+    surface: '#1e293b', // Dark mode background
+    text: '#f8fafc',    // Dark mode text
+  }}
+/>
+```
+
+Available theme keys: `primary`, `success`, `danger`, `warning`, `background`, `surface`, `text`, `border`.
+
+### Styles Prop (Deep Customization)
+
+For deeper control, pass an object of inline style overrides to `styles={...}`. You can target specific elements inside the component.
+
+```tsx
+<LivenessCheck
+  styles={{
+    root: { borderRadius: '12px', border: 'none', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' },
+    cameraFrame: { borderRadius: '8px' },
+    instructionCard: { background: '#f1f5f9' },
+    actionButton: { textTransform: 'uppercase', letterSpacing: '1px' }
+  }}
+/>
+```
+
+Available style keys: `root`, `header`, `titleGroup`, `title`, `subtitle`, `secureBadge`, `errorBanner`, `cameraShell`, `cameraFrame`, `video`, `faceGuide`, `idleOverlay`, `loadingOverlay`, `resultOverlay`, `warningPill`, `capturedThumb`, `progressWrapper`, `progressTrack`, `progressFill`, `challengePills`, `challengePill`, `instructionCard`, `instructionIcon`, `instructionText`, `actionWrapper`, `actionButton`, `resultList`, `resultPill`.
 
 ---
 
@@ -87,6 +127,8 @@ function MyCustomLiveness() {
 
 ## Custom challenges
 
+You can provide your own challenge pool using the `challengePool` prop. The component will randomly pick `numberOfChallenge` challenges from this pool for each verification session.
+
 ```tsx
 import { LivenessCheck, Challenge } from '@kloudlot/react-liveness';
 
@@ -115,7 +157,11 @@ const MY_CHALLENGES: Challenge[] = [
   },
 ];
 
-<LivenessCheck challenges={MY_CHALLENGES} onComplete={...} />
+<LivenessCheck 
+  numberOfChallenge={2} 
+  challengePool={MY_CHALLENGES} 
+  onComplete={console.log} 
+/>
 ```
 
 ### Available blendshape keys

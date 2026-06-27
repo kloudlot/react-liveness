@@ -312,6 +312,8 @@ export interface LivenessCheckProps {
   className?: string;
   theme?: LivenessTheme;
   styles?: LivenessStyles;
+  numberOfChallenge?: number;
+  challengePool?: Challenge[];
 }
 
 export function LivenessCheck({
@@ -319,6 +321,8 @@ export function LivenessCheck({
   className,
   theme,
   styles: customStyles,
+  numberOfChallenge = 3,
+  challengePool,
 }: LivenessCheckProps) {
   const {
     videoRef,
@@ -542,7 +546,7 @@ export function LivenessCheck({
   });
 
   const handleStart = useCallback(async () => {
-    const picked = pickChallenges(3);
+    const picked = pickChallenges(numberOfChallenge, challengePool);
     setChallenges(picked);
     challengesRef.current = picked;
     setResults([]);
