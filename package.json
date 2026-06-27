@@ -1,6 +1,6 @@
 {
   "name": "@kloudlot/react-liveness",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Headless React liveness check component using MediaPipe face detection",
   "keywords": ["liveness", "face-detection", "mediapipe", "react", "kyc", "identity-verification"],
   "author": "Kazeem",
@@ -19,8 +19,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --external react --external react-dom --external @mediapipe/tasks-vision",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external react --external react-dom --external @mediapipe/tasks-vision",
+    "build": "tsup src/index.ts --format cjs,esm --dts --banner.js \"'use client';\" --external react --external react-dom --external @mediapipe/tasks-vision",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --banner.js \"'use client';\" --external react --external react-dom --external @mediapipe/tasks-vision",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
@@ -30,7 +30,7 @@
     "react-dom": ">=18.0.0"
   },
   "devDependencies": {
-    "@mediapipe/tasks-vision": "^0.10.35",
+    "@mediapipe/tasks-vision": "^0.10.14",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "react": "^18.3.0",

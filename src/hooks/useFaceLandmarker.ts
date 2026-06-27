@@ -1,5 +1,3 @@
-'use client';
-
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   BlendshapeMap,
@@ -12,8 +10,8 @@ const NOD_HISTORY_LENGTH = 15;
 
 // ---------------------------------------------------------------------------
 // GPU support detection
-// MediaPipe GPU delegate requires WebGL2 + EXT_color_buffer_float.
-// Mid-range Android devices may have WebGL2 but lack the extension.
+// Requires WebGL2 + EXT_color_buffer_float. Mid-range Android devices often
+// have WebGL2 but lack the extension — fall back to CPU silently.
 // ---------------------------------------------------------------------------
 function supportsGpuDelegate(): boolean {
   try {
@@ -24,6 +22,57 @@ function supportsGpuDelegate(): boolean {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resolve WASM base path from the installed @mediapipe/tasks-vision package.
+//
+// WHY NOT a hardcoded CDN URL:
+//   The CDN URL must match the exact installed JS version or the WASM binary
+//   is incompatible and detectForVideo silently returns no landmarks.
+//   e.g. JS=0.10.35 + WASM@0.10.14 = detector initialises but returns [].
+//
+// HOW THIS WORKS:
+//   @mediapipe/tasks-vision exports its WASM files via package.json "exports".
+//   We import one of them and derive the base directory from its resolved URL.
+//   This always matches the installed version — no hardcoding needed.
+// ---------------------------------------------------------------------------
+async function resolveWasmPath(): Promise<string> {
+  try {
+    // Import the internal WASM loader — its resolved URL tells us where
+    // the package's wasm/ directory lives in the consumer's bundler output.
+    const wasmModule = await import(
+      /* webpackChunkName: "mediapipe-wasm" */
+      // @ts-ignore
+      '@mediapipe/tasks-vision/vision_wasm_internal.js'
+    );
+    // The module's default export or import.meta.url gives us the resolved path.
+    // Strip the filename to get the directory.
+    const url: string =
+      (wasmModule as any).default?.locateFile?.('') ??
+      (typeof (wasmModule as any).__esModule !== 'undefined'
+        ? new URL('./wasm', import.meta.url).href
+        : '');
+    if (url) return url.replace(/\/[^/]+$/, '');
+  } catch {
+    // Bundler didn't resolve the internal module path — fall through to CDN
+  }
+
+  // Fallback: derive version from the JS module itself and hit jsDelivr.
+  // This still matches versions because we read it dynamically.
+  try {
+    const pkg = await fetch(
+      new URL('../../node_modules/@mediapipe/tasks-vision/package.json', import.meta.url)
+    ).then((r) => r.json()).catch(() => null);
+    if (pkg?.version) {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${pkg.version}/wasm`;
+    }
+  } catch {
+    // ignore
+  }
+
+  // Last resort: use a version-agnostic jsDelivr URL (no @version = latest)
+  return 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
 }
 
 // ---------------------------------------------------------------------------
@@ -60,15 +109,20 @@ export function useFaceLandmarker(
 
     async function init() {
       try {
-        const { FaceLandmarker, FilesetResolver } = await loadMediaPipe();
+        const [{ FaceLandmarker, FilesetResolver }, wasmPath] = await Promise.all([
+          loadMediaPipe(),
+          resolveWasmPath(),
+        ]);
+
         if (cancelled) return;
 
-        const filesetResolver = await FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-        );
+        console.info(`[react-liveness] WASM path: ${wasmPath}`);
+
+        const filesetResolver = await FilesetResolver.forVisionTasks(wasmPath);
         if (cancelled) return;
 
         const useGpu = supportsGpuDelegate();
+        console.info(`[react-liveness] Delegate: ${useGpu ? 'GPU' : 'CPU'}`);
 
         const faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
           baseOptions: {
@@ -87,14 +141,14 @@ export function useFaceLandmarker(
         setIsLoading(false);
       } catch (err) {
         if (!cancelled) {
-          console.error('[useFaceLandmarker] init failed:', err);
+          console.error('[react-liveness] init failed:', err);
           setError(
             err instanceof Error
               ? err.message
               : 'Failed to load face detection model.'
           );
           setIsLoading(false);
-          mediaPipePromise = null; // allow retry on next mount
+          mediaPipePromise = null; // allow retry
         }
       }
     }
@@ -118,7 +172,7 @@ export function useFaceLandmarker(
       }
 
       try {
-        const results     = landmarkerRef.current.detectForVideo(video, performance.now());
+        const results      = landmarkerRef.current.detectForVideo(video, performance.now());
         const faceDetected = (results.faceLandmarks?.length ?? 0) > 0;
         const blendshapes: BlendshapeMap = {};
 
@@ -132,12 +186,13 @@ export function useFaceLandmarker(
           const leftCheek  = lm[234];
           const rightCheek = lm[454];
 
-          // Synthetic headYaw (unmirrored space; video is scaleX(-1))
+          // Synthetic headYaw — unmirrored landmark space
+          // video renders scaleX(-1) so: left on screen = positive yaw
           if (noseTip && leftCheek && rightCheek) {
             blendshapes['headYaw'] = noseTip.x - (leftCheek.x + rightCheek.x) / 2;
           }
 
-          // Synthetic headNod via sliding window on noseTip.y
+          // Synthetic headNod — sliding window on noseTip.y
           const noseY = noseTip?.y;
           if (noseY !== undefined) {
             noseYHistoryRef.current.push(noseY);
