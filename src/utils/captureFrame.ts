@@ -1,24 +1,18 @@
-import { CapturedFrame } from '../types';
+// utils/captureFrame.ts
 
-export interface CaptureFrameOptions {
-  scale?: number;
-  format?: 'image/png' | 'image/jpeg';
-  quality?: number;
+export interface CapturedFrame {
+  dataUrl: string;           // base64 PNG — use for display or sending to backend
+  blob: () => Promise<Blob>; // lazy blob — use for FormData upload
+  width: number;
+  height: number;
+  capturedAt: Date;
 }
 
-/**
- * Captures a still frame from a live <video> element.
- *
- * The canvas is mirrored to match the scaleX(-1) CSS transform applied to
- * the video in the UI, so the captured image looks natural to the user.
- *
- * Returns null if the video isn't ready or the canvas context is unavailable.
- */
 export function captureFrame(
   video: HTMLVideoElement,
-  options: CaptureFrameOptions = {}
+  options?: { scale?: number; format?: 'image/png' | 'image/jpeg'; quality?: number }
 ): CapturedFrame | null {
-  const { scale = 1, format = 'image/jpeg', quality = 0.88 } = options;
+  const { scale = 1, format = 'image/png', quality = 0.92 } = options ?? {};
 
   if (video.readyState < 2 || video.videoWidth === 0) return null;
 
@@ -29,7 +23,9 @@ export function captureFrame(
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
-  // Mirror the canvas to match the scaleX(-1) on the video element
+  // The video renders mirrored (scaleX(-1)) in the UI, but we want the
+  // captured image to also appear natural (mirror-flipped), matching what
+  // the user saw. Flip the canvas context to match.
   ctx.translate(canvas.width, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -38,16 +34,15 @@ export function captureFrame(
 
   return {
     dataUrl,
-    blob: () =>
-      new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error('canvas.toBlob failed'))),
-          format,
-          quality
-        )
-      ),
-    width:       canvas.width,
-    height:      canvas.height,
-    capturedAt:  new Date(),
+    blob: () => new Promise((resolve, reject) =>
+      canvas.toBlob(
+        (b) => b ? resolve(b) : reject(new Error('Canvas toBlob failed')),
+        format,
+        quality
+      )
+    ),
+    width:  canvas.width,
+    height: canvas.height,
+    capturedAt: new Date(),
   };
 }

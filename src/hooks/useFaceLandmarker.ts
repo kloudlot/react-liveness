@@ -1,13 +1,31 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import {
-  BlendshapeMap,
-  FaceLandmarkerResult,
-  UseFaceLandmarkerOptions,
-  UseFaceLandmarkerReturn,
-} from '../types';
+'use client';
 
+import { useEffect, useRef, useState, useCallback } from 'react';
+
+export interface BlendshapeMap {
+  [key: string]: number;
+}
+
+export interface FaceLandmarkerResult {
+  blendshapes: BlendshapeMap;
+  faceDetected: boolean;
+  landmarks: { x: number; y: number; z: number }[];
+}
+
+interface UseFaceLandmarkerOptions {
+  onResult?: (result: FaceLandmarkerResult) => void;
+  enabled?: boolean;
+}
+
+// Sliding-window constants for headNod synthesis
 const NOD_HISTORY_LENGTH = 15;
 
+// ---------------------------------------------------------------------------
+// GPU support detection
+// MediaPipe GPU delegate requires WebGL2 + EXT_color_buffer_float.
+// Mid-range Android devices (e.g. Nokia X20) have WebGL2 but lack the
+// required extension, causing silent init failures. Fall back to CPU.
+// ---------------------------------------------------------------------------
 function supportsGpuDelegate(): boolean {
   try {
     const canvas = document.createElement('canvas');
@@ -20,74 +38,70 @@ function supportsGpuDelegate(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Module-level singleton for the MediaPipe import ONLY.
-// The FaceLandmarker instance itself is NOT cached here — each hook instance
-// owns its own landmarker and cleans it up on unmount.
+// loadMediaPipe — dynamic ES module import, no <Script> tag needed.
 //
-// Separating the two prevents the bug where:
-//   1. Component unmounts → landmarker.close() called
-//   2. Component remounts → mediaPipePromise resolves instantly (cached)
-//      but landmarkerRef.current is null until createFromOptions finishes
-//   3. startDetection called before createFromOptions completes → silent no-op
+// WHY NOT window globals / <Script> tags:
+//   • next/script beforeInteractive only works in layout.tsx / _document.js,
+//     not in page components. Even then it doesn't block hook execution.
+//   • vision_bundle.mjs is ESM and never sets window globals.
+//   • vision_bundle.js (UMD) sets globals but load timing is not guaranteed
+//     relative to React hydration, especially on slow mobile connections.
+//
+// Dynamic import() is the correct pattern for Next.js App Router:
+//   • Module is fetched exactly once (bundler/browser cache deduplicates).
+//   • Promise resolves only after the module is fully executed.
+//   • Works in both SSR (guarded by the enabled check) and CSR.
+//   • No polling, no race conditions, no global namespace pollution.
 // ---------------------------------------------------------------------------
-let mediaPipeModulePromise: Promise<{ FaceLandmarker: any; FilesetResolver: any }> | null = null;
+let mediaPipePromise: Promise<{ FaceLandmarker: any; FilesetResolver: any }> | null = null;
 
-function loadMediaPipeModule(): Promise<{ FaceLandmarker: any; FilesetResolver: any }> {
-  if (!mediaPipeModulePromise) {
-    mediaPipeModulePromise = import('@mediapipe/tasks-vision').then((mod) => ({
+function loadMediaPipe(): Promise<{ FaceLandmarker: any; FilesetResolver: any }> {
+  // Singleton promise — only one network request regardless of how many
+  // times the hook mounts (e.g. StrictMode double-mount, route transitions).
+  if (!mediaPipePromise) {
+    mediaPipePromise = import('@mediapipe/tasks-vision').then((mod) => ({
       FaceLandmarker: mod.FaceLandmarker,
       FilesetResolver: mod.FilesetResolver,
     }));
   }
-  return mediaPipeModulePromise;
-}
-
-// Derive the WASM path from the installed package version.
-// Always uses the unversioned jsDelivr URL which redirects to latest —
-// this matches whatever @mediapipe/tasks-vision version the consumer installed
-// as long as they're on a recent version (>=0.10.0).
-// The FilesetResolver caches WASM internally so repeated calls are free.
-function getWasmPath(): string {
-  return 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
+  return mediaPipePromise;
 }
 
 export function useFaceLandmarker(
-  videoRef: React.RefObject<HTMLVideoElement>,
+  videoRef: React.RefObject<HTMLVideoElement | null>,
   options: UseFaceLandmarkerOptions = {}
-): UseFaceLandmarkerReturn {
-  const { onResult } = options;
+) {
+  const { onResult, enabled = true } = options;
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError]         = useState<string | null>(null);
-  const landmarkerRef             = useRef<any>(null);
-  const rafRef                    = useRef<number | null>(null);
-  const runningRef                = useRef(false);
-  const noseYHistoryRef           = useRef<number[]>([]);
-  // Tracks whether init() is in progress so startDetection can wait for it
-  const initPromiseRef            = useRef<Promise<void> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const landmarkerRef = useRef<any>(null);
+  const rafRef = useRef<number | null>(null);
+  const runningRef = useRef(false);
 
-  // ---------------------------------------------------------------------------
-  // Init runs ONCE on mount — not gated on any status/enabled prop.
-  // The consumer controls detection via startDetection/stopDetection.
-  // ---------------------------------------------------------------------------
+  // Sliding window for headNod: tracks noseTip.y over the last N frames
+  const noseYHistoryRef = useRef<number[]>([]);
+
   useEffect(() => {
+    if (!enabled) return;
+
     let cancelled = false;
 
-    const initPromise = (async () => {
+    async function init() {
       try {
-        setIsLoading(true);
-        setError(null);
+        const { FaceLandmarker, FilesetResolver } = await loadMediaPipe();
 
-        const { FaceLandmarker, FilesetResolver } = await loadMediaPipeModule();
         if (cancelled) return;
 
-        const wasmPath = getWasmPath();
-        console.info(`[react-liveness] WASM: ${wasmPath}`);
+        const filesetResolver = await FilesetResolver.forVisionTasks(
+          // Pin to a specific version to avoid unexpected breaking changes on mobile.
+          // The WASM files are small (~500KB) and cached after the first load.
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+        );
 
-        const filesetResolver = await FilesetResolver.forVisionTasks(wasmPath);
         if (cancelled) return;
 
         const useGpu = supportsGpuDelegate();
-        console.info(`[react-liveness] Delegate: ${useGpu ? 'GPU' : 'CPU'}`);
+        console.info(`[useFaceLandmarker] Using ${useGpu ? 'GPU' : 'CPU'} delegate`);
 
         const faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
           baseOptions: {
@@ -107,50 +121,32 @@ export function useFaceLandmarker(
 
         landmarkerRef.current = faceLandmarker;
         setIsLoading(false);
-        console.info('[react-liveness] FaceLandmarker ready');
       } catch (err) {
         if (!cancelled) {
-          console.error('[react-liveness] init failed:', err);
-          setError(err instanceof Error ? err.message : 'Failed to load face detection model.');
+          console.error('[useFaceLandmarker] init failed:', err);
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Failed to load face detection model. Please check your connection and try again.'
+          );
           setIsLoading(false);
-          // Reset module cache so a page refresh / retry can recover
-          mediaPipeModulePromise = null;
+          // Reset the singleton so a retry (handleReset → re-enable) fetches fresh
+          mediaPipePromise = null;
         }
       }
-    })();
+    }
 
-    initPromiseRef.current = initPromise;
+    init();
 
     return () => {
       cancelled = true;
-      // Stop the RAF loop first, then close the landmarker
-      runningRef.current = false;
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      landmarkerRef.current?.close();
-      landmarkerRef.current = null;
     };
-  // Empty deps: run once on mount, clean up on unmount.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enabled]);
 
   const startDetection = useCallback(() => {
-    // If already running, no-op
-    if (runningRef.current) return;
-
-    // If landmarker isn't ready yet, wait for init then start
-    if (!landmarkerRef.current) {
-      initPromiseRef.current?.then(() => {
-        if (landmarkerRef.current) {
-          startDetection();
-        }
-      });
-      return;
-    }
-
+    if (!landmarkerRef.current || runningRef.current) return;
     runningRef.current = true;
+    // Clear nod history on (re)start so stale frames don't pollute a new challenge
     noseYHistoryRef.current = [];
 
     function detect() {
@@ -163,25 +159,41 @@ export function useFaceLandmarker(
       }
 
       try {
-        const results      = landmarkerRef.current.detectForVideo(video, performance.now());
+        const results = landmarkerRef.current.detectForVideo(video, performance.now());
         const faceDetected = (results.faceLandmarks?.length ?? 0) > 0;
-        const blendshapes: BlendshapeMap = {};
+        const rawBlendshapes = results.faceBlendshapes?.[0]?.categories ?? [];
 
-        for (const b of results.faceBlendshapes?.[0]?.categories ?? []) {
+        const blendshapes: BlendshapeMap = {};
+        for (const b of rawBlendshapes) {
           blendshapes[b.categoryName] = b.score;
         }
 
         if (faceDetected && results.faceLandmarks?.[0]) {
-          const lm         = results.faceLandmarks[0];
-          const noseTip    = lm[1];
-          const leftCheek  = lm[234];
-          const rightCheek = lm[454];
+          const landmarks = results.faceLandmarks[0];
 
+          // ── headYaw ──────────────────────────────────────────────────────────
+          // Computed in MediaPipe's unmirrored coordinate space.
+          // noseTip (1) vs midpoint of left cheek (234) and right cheek (454).
+          //
+          // Because the video renders with scaleX(-1):
+          //   User turns LEFT  on screen → noseTip.x > centerX → headYaw > 0
+          //   User turns RIGHT on screen → noseTip.x < centerX → headYaw < 0
+          //
+          // Positive threshold → passes when headYaw > threshold (turn left)
+          // Negative threshold → passes when headYaw < threshold (turn right)
+          const noseTip    = landmarks[1];
+          const leftCheek  = landmarks[234];
+          const rightCheek = landmarks[454];
           if (noseTip && leftCheek && rightCheek) {
-            blendshapes['headYaw'] = noseTip.x - (leftCheek.x + rightCheek.x) / 2;
+            const centerX = (leftCheek.x + rightCheek.x) / 2;
+            blendshapes['headYaw'] = noseTip.x - centerX;
           }
 
-          const noseY = noseTip?.y;
+          // ── headNod ──────────────────────────────────────────────────────────
+          // No blendshape encodes head pitch, so we synthesise one via a
+          // sliding window on noseTip.y across NOD_HISTORY_LENGTH frames.
+          // A natural nod moves the nose ~0.015–0.025 in normalised coords.
+          const noseY = landmarks[1]?.y;
           if (noseY !== undefined) {
             noseYHistoryRef.current.push(noseY);
             if (noseYHistoryRef.current.length > NOD_HISTORY_LENGTH) {
@@ -189,14 +201,19 @@ export function useFaceLandmarker(
             }
             if (noseYHistoryRef.current.length === NOD_HISTORY_LENGTH) {
               const ys = noseYHistoryRef.current;
-              blendshapes['headNod'] = Math.max(...ys) - Math.min(...ys);
+              const range = Math.max(...ys) - Math.min(...ys);
+              blendshapes['headNod'] = range;
             }
           }
         }
 
-        onResult?.({ blendshapes, faceDetected, landmarks: results.faceLandmarks?.[0] ?? [] });
+        onResult?.({
+          blendshapes,
+          faceDetected,
+          landmarks: results.faceLandmarks?.[0] ?? [],
+        });
       } catch {
-        // skip frame errors silently
+        // Silently skip frame errors to avoid interrupting the RAF loop
       }
 
       rafRef.current = requestAnimationFrame(detect);
@@ -213,6 +230,13 @@ export function useFaceLandmarker(
       rafRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    return () => {
+      stopDetection();
+      landmarkerRef.current?.close();
+    };
+  }, [stopDetection]);
 
   return { isLoading, error, startDetection, stopDetection };
 }

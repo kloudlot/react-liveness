@@ -91,6 +91,8 @@ export interface UseFaceLandmarkerReturn {
   error: string | null;
   startDetection: () => void;
   stopDetection: () => void;
+  /** Resolves when the FaceLandmarker model is initialized and ready to detect. */
+  waitForReady: () => Promise<void>;
 }
 
 export interface UseCameraReturn {
