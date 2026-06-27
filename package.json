@@ -1,6 +1,6 @@
 {
   "name": "@kloudlot/react-liveness",
-  "version": "1.0.7",
+  "version": "1.0.2",
   "description": "Headless React liveness check component using MediaPipe face detection",
   "keywords": [
     "liveness",
