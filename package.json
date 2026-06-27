@@ -48,5 +48,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/kloudlot/react-liveness"
+  },
+  "dependencies": {
+    "lucide-react": "^1.21.0"
   }
 }

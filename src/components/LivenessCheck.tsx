@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useCamera } from "../hooks/useCamera";
 import { useFaceLandmarker } from "../hooks/useFaceLandmarker";
@@ -14,9 +13,31 @@ import { useLivenessAudio } from "../hooks/useLivenessAudio";
 import { pickChallenges } from "../challenges";
 import { captureFrame } from "../utils/captureFrame";
 
+import {
+  ShieldCheck,
+  Camera,
+  LoaderCircle,
+  AlertTriangle,
+  CircleCheckBig,
+  CircleX,
+  ScanFace,
+  Lock,
+} from "lucide-react";
+
 
 const VIDEO_W = 480;
 const VIDEO_H = 360;
+
+interface LivenessTheme {
+  primary?: string;
+  success?: string;
+  danger?: string;
+  warning?: string;
+  background?: string;
+  surface?: string;
+  text?: string;
+  border?: string;
+}
 
 interface LivenessCheckProps {
   onComplete?: (
@@ -25,9 +46,14 @@ interface LivenessCheckProps {
     frame?: CapturedFrame,
   ) => void;
   className?: string;
+  theme?: LivenessTheme;
 }
 
-export function LivenessCheck({ onComplete, className }: LivenessCheckProps) {
+export function LivenessCheck({
+  onComplete,
+  className,
+  theme,
+}: LivenessCheckProps) {
   const {
     videoRef,
     isCameraReady,
@@ -35,6 +61,18 @@ export function LivenessCheck({ onComplete, className }: LivenessCheckProps) {
     startCamera,
     stopCamera,
   } = useCamera();
+
+  const themeVars = {
+    "--live-primary": theme?.primary || "#2563eb",
+    "--live-success": theme?.success || "#16a34a",
+    "--live-danger": theme?.danger || "#dc2626",
+    "--live-warning": theme?.warning || "#f59e0b",
+    "--live-bg": theme?.background || "#f8fafc",
+    "--live-surface": theme?.surface || "#ffffff",
+    "--live-text": theme?.text || "#0f172a",
+    "--live-border": theme?.border || "#e2e8f0",
+  } as React.CSSProperties;
+
   const audio = useLivenessAudio();
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -50,7 +88,6 @@ export function LivenessCheck({ onComplete, className }: LivenessCheckProps) {
   const [capturedFrame, setCapturedFrame] = useState<CapturedFrame | null>(
     null,
   );
-
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const challengeStartRef = useRef<number>(0);
@@ -302,280 +339,205 @@ export function LivenessCheck({ onComplete, className }: LivenessCheckProps) {
   const allPassed = isDone && results.every((r) => r.passed);
 
   const progressPct = currentChallenge
-    ? ((currentChallenge.timeoutMs - timeRemaining) / currentChallenge.timeoutMs) * 100
+    ? ((currentChallenge.timeoutMs - timeRemaining) /
+        currentChallenge.timeoutMs) *
+      100
     : 0;
 
   return (
-    <div
-      className={className}
-      style={{
-        background: '#111827',
-        borderRadius: 16,
-        overflow: 'hidden',
-        border: '1px solid rgba(255,255,255,0.08)',
-        boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
-        maxWidth: 520,
-        width: '100%',
-        margin: '0 auto',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-      }}
-    >
+    <div className={`liveness-root ${className || ""}`} style={themeVars}>
       {/* Header */}
-      <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.08)', background: '#0f172a' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <header className="liveness-header">
+        <div className="title-group">
+          <ShieldCheck size={22} />
           <div>
-            <div style={{ fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#93c5fd', fontWeight: 700, marginBottom: 2 }}>
-              Identity Verification
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>Liveness Check</div>
+            <h3>Liveness Verification</h3>
+            <p>Biometric identity confirmation</p>
           </div>
-          {isActive && (
-            <span style={{
-              fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700,
-              padding: '3px 8px', borderRadius: 6,
-              background: faceDetected ? 'rgba(34,197,94,0.15)' : 'rgba(251,146,60,0.15)',
-              color: faceDetected ? '#4ade80' : '#fb923c',
-            }}>
-              {faceDetected ? '● Face detected' : '○ No face'}
-            </span>
+        </div>
+
+        <div className="secure-badge">
+          <Lock size={14} />
+          Secure
+        </div>
+      </header>
+
+      {/* Errors */}
+      {(cameraError || modelError) && (
+        <div className="error-banner">
+          <AlertTriangle size={16} />
+          <span>{cameraError || modelError}</span>
+        </div>
+      )}
+
+      {/* Camera Section */}
+      <section className="camera-shell">
+        <div className="camera-frame">
+          {/* Video */}
+          <video
+            ref={videoRef}
+            width={VIDEO_W}
+            height={VIDEO_H}
+            className="camera-video"
+            playsInline
+            muted
+          />
+
+          {/* Face guide */}
+          {(isActive || isDone) && (
+            <div
+              className={`face-guide ${
+                faceDetected ? "detected" : ""
+              } ${challengePassed ? "passed" : ""}`}
+            />
+          )}
+
+          {/* Idle overlay */}
+          {status === "idle" && (
+            <div className="idle-overlay">
+              <Camera size={56} />
+              <h3>Camera Required</h3>
+              <p>Allow camera access to start verification</p>
+            </div>
+          )}
+
+          {/* Loading overlay */}
+          {status === "waiting" && (
+            <div className="loading-overlay">
+              <LoaderCircle size={48} className="spin" />
+              <p>
+                {!isCameraReady
+                  ? "Starting camera..."
+                  : "Preparing face detection..."}
+              </p>
+            </div>
+          )}
+
+          {/* Warning */}
+          {status === "detecting" && !faceDetected && (
+            <div className="warning-pill">
+              <AlertTriangle size={14} />
+              Center your face in the frame
+            </div>
+          )}
+
+          {/* Success / Fail Overlay */}
+          {isDone && (
+            <div className="result-overlay">
+              {allPassed ? <CircleCheckBig size={72} /> : <CircleX size={72} />}
+
+              <h2>
+                {allPassed ? "Verification Successful" : "Verification Failed"}
+              </h2>
+
+              <p>
+                {allPassed
+                  ? `${results.length} challenges completed`
+                  : "Some challenges were not completed"}
+              </p>
+
+              {capturedFrame && (
+                <div className="captured-thumb">
+                  <img src={capturedFrame.dataUrl} alt="Captured" />
+                </div>
+              )}
+            </div>
           )}
         </div>
-      </div>
- 
-      {/* Camera */}
-      <div style={{ position: 'relative', background: '#000', lineHeight: 0 }}>
-        <video
-          ref={videoRef}
-          width={VIDEO_W}
-          height={VIDEO_H}
-          style={{
-            display: isActive || isDone ? 'block' : 'none',
-            transform: 'scaleX(-1)',
-            objectFit: 'cover',
-            maxWidth: '100%',
-          }}
-          playsInline
-          muted
-        />
- 
-        {/* Idle placeholder */}
-        {status === 'idle' && (
-          <div style={{ width: VIDEO_W, height: VIDEO_H, maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#030712', gap: 12 }}>
-            <span style={{ fontSize: 48 }}>🎥</span>
-            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>Camera preview will appear here</span>
-          </div>
-        )}
- 
-        {/* Loading overlay */}
-        {status === 'waiting' && (isModelLoading || !isCameraReady) && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', gap: 12 }}>
-            <div style={{ width: 36, height: 36, border: '3px solid #93c5fd', borderTopColor: 'transparent', borderRadius: '50%', animation: 'liveness-spin 0.8s linear infinite' }} />
-            <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: 500 }}>
-              {!isCameraReady ? 'Starting camera…' : 'Loading face model…'}
-            </span>
-          </div>
-        )}
- 
-        {/* Pulse ring */}
-        {status === 'detecting' && faceDetected && !challengePassed && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%',
-            transform: 'translate(-50%, -50%)',
-            width: 180, height: 220,
-            border: '2px solid #93c5fd',
-            borderRadius: '50%',
-            pointerEvents: 'none',
-            opacity: 0.4,
-            animation: 'liveness-pulse 2s ease-in-out infinite',
-          }} />
-        )}
- 
-        {/* No face warning */}
-        {status === 'detecting' && !faceDetected && (
-          <div style={{
-            position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
-            background: 'rgba(0,0,0,0.8)', padding: '6px 14px', borderRadius: 999,
-            border: '1px solid #f97316', whiteSpace: 'nowrap',
-          }}>
-            <span style={{ fontSize: 11, color: '#fb923c', fontWeight: 600 }}>⚠ Position your face in the frame</span>
-          </div>
-        )}
- 
-        {/* Done overlay */}
-        {isDone && (
-          <div style={{
-            position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            background: allPassed ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.75)', gap: 12,
-          }}>
-            <div style={{
-              width: 72, height: 72, borderRadius: '50%',
-              background: allPassed ? '#16a34a' : '#dc2626',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 32, animation: 'liveness-pop 0.4s ease-out',
-            }}>
-              {allPassed ? '✓' : '✗'}
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>
-                {allPassed ? 'Verification Passed!' : 'Verification Failed'}
-              </div>
-              <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 4 }}>
-                {allPassed
-                  ? `${results.filter((r) => r.passed).length}/${results.length} challenges completed`
-                  : 'Not all challenges were completed in time'}
-              </div>
-            </div>
-            {/* Captured frame thumbnail */}
-            {capturedFrame && (
-              <div style={{
-                position: 'absolute', bottom: 12, right: 12,
-                width: 80, height: 60, borderRadius: 8, overflow: 'hidden',
-                border: '2px solid #4ade80', boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-              }}>
-                <img src={capturedFrame.dataUrl} alt="Captured" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              </div>
-            )}
-          </div>
-        )}
-      </div>
- 
-      {/* Bottom panel */}
-      <div style={{ padding: '20px 24px', background: '#111827' }}>
-        {/* Errors */}
-        {(cameraError || modelError) && (
-          <div style={{ background: 'rgba(220,38,38,0.15)', border: '1px solid rgba(220,38,38,0.4)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: '#fca5a5', fontSize: 13 }}>
-            ⚠ {cameraError || modelError}
-          </div>
-        )}
- 
-        {/* Idle */}
-        {status === 'idle' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, textAlign: 'center', margin: 0 }}>
-              We'll ask you to perform a few simple actions to verify you're a real person.
-            </p>
-            <button
-              onClick={handleStart}
+      </section>
+
+      {/* Progress */}
+      {isActive && (
+        <div className="progress-wrapper">
+          <div className="progress-track">
+            <div
+              className="progress-fill"
               style={{
-                width: '100%', padding: '11px 0', borderRadius: 10, border: 'none',
-                background: '#2563eb', color: '#fff', fontWeight: 600, fontSize: 14,
-                cursor: 'pointer', letterSpacing: '0.03em',
-              }}
-            >
-              Start Verification
-            </button>
-          </div>
-        )}
- 
-        {/* Active */}
-        {isActive && challenges.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Step indicators */}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              {challenges.map((ch, i) => {
-                const done   = i < currentIndex;
-                const active = i === currentIndex;
-                const res    = results[i];
-                return (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px',
-                    borderRadius: 20, fontSize: 11, fontWeight: 600,
-                    background: done
-                      ? (res?.passed ? 'rgba(34,197,94,0.15)' : 'rgba(220,38,38,0.15)')
-                      : active ? 'rgba(37,99,235,0.2)' : 'rgba(255,255,255,0.05)',
-                    border: `1px solid ${done
-                      ? (res?.passed ? 'rgba(34,197,94,0.4)' : 'rgba(220,38,38,0.4)')
-                      : active ? 'rgba(37,99,235,0.5)' : 'rgba(255,255,255,0.08)'}`,
-                    color: done
-                      ? (res?.passed ? '#4ade80' : '#f87171')
-                      : active ? '#93c5fd' : 'rgba(255,255,255,0.3)',
-                  }}>
-                    <span>{ch.icon}</span>
-                    <span>{done ? (res?.passed ? '✓' : '✗') : ch.label}</span>
-                  </div>
-                );
-              })}
-            </div>
- 
-            {/* Progress bar */}
-            <div style={{ height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: 2,
                 width: `${progressPct}%`,
-                background: progressPct > 80 ? '#ef4444' : '#2563eb',
-                transition: 'width 0.1s linear, background 0.3s',
-              }} />
-            </div>
- 
-            {/* Instruction */}
-            {currentChallenge && status === 'detecting' && (
-              <div style={{
-                background: 'rgba(255,255,255,0.05)', borderRadius: 12,
-                padding: '16px 20px', textAlign: 'center',
-                border: '1px solid rgba(37,99,235,0.3)',
-              }}>
-                <div style={{ fontSize: 28, marginBottom: 6 }}>{currentChallenge.icon}</div>
-                <div style={{ color: '#93c5fd', fontWeight: 700, fontSize: 14, letterSpacing: '0.02em' }}>
-                  {currentChallenge.instruction}
-                </div>
-                <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 6, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                  Challenge {currentIndex + 1} of {challenges.length}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
- 
-        {/* Done */}
-        {isDone && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-              {results.map((r, i) => (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px',
-                  borderRadius: 8, fontSize: 10, fontWeight: 700,
-                  background: r.passed ? 'rgba(34,197,94,0.15)' : 'rgba(220,38,38,0.15)',
-                  color: r.passed ? '#4ade80' : '#f87171',
-                }}>
-                  <span>{challenges[i]?.icon}</span>
-                  <span style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    {r.passed ? `✓ ${(r.timeMs / 1000).toFixed(1)}s` : '✗ timeout'}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={handleReset}
-              style={{
-                width: '100%', padding: '11px 0', borderRadius: 10,
-                border: allPassed ? 'none' : '1px solid rgba(255,255,255,0.2)',
-                background: allPassed ? '#16a34a' : 'transparent',
-                color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer',
               }}
-            >
-              {allPassed ? 'Done' : 'Try Again'}
-            </button>
+            />
           </div>
-        )}
-      </div>
- 
-      {/* Keyframe animations via injected <style> */}
-      <style>{`
-        @keyframes liveness-spin {
-          to { transform: rotate(360deg); }
-        }
-        @keyframes liveness-pulse {
-          0%   { transform: translate(-50%,-50%) scale(0.95); opacity: 0.6; }
-          70%  { transform: translate(-50%,-50%) scale(1.05); opacity: 0.2; }
-          100% { transform: translate(-50%,-50%) scale(0.95); opacity: 0.6; }
-        }
-        @keyframes liveness-pop {
-          0%   { transform: scale(0); }
-          60%  { transform: scale(1.3); }
-          100% { transform: scale(1); }
-        }
-      `}</style>
+        </div>
+      )}
+
+      {/* Challenge Pills */}
+      {challenges.length > 0 && (
+        <div className="challenge-pills">
+          {challenges.map((challenge, i) => {
+            const done = i < currentIndex;
+            const active = i === currentIndex;
+            const res = results[i];
+
+            return (
+              <div
+                key={i}
+                className={`challenge-pill
+                ${done ? "done" : ""}
+                ${active ? "active" : ""}
+                ${res?.passed ? "passed" : ""}
+                ${res && !res.passed ? "failed" : ""}
+              `}
+              >
+                <span>{challenge.icon}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Instruction Card */}
+      {isActive && currentChallenge && status === "detecting" && (
+        <div className="instruction-card">
+          <div className="instruction-icon">
+            <ScanFace size={24} />
+          </div>
+
+          <div className="instruction-text">
+            <h4>{currentChallenge.instruction}</h4>
+            <p>
+              Step {currentIndex + 1} of {challenges.length}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Idle CTA */}
+      {status === "idle" && (
+        <div className="action-wrapper">
+          <button className="action-button" onClick={handleStart}>
+            Start Verification
+          </button>
+        </div>
+      )}
+
+      {/* Done CTA */}
+      {isDone && (
+        <div className="action-wrapper">
+          <button className="action-button" onClick={handleReset}>
+            {allPassed ? "Done" : "Try Again"}
+          </button>
+        </div>
+      )}
+
+      {/* Challenge Result Summary */}
+      {isDone && (
+        <div className="result-list">
+          {results.map((result, idx) => (
+            <div
+              key={idx}
+              className={`result-pill ${result.passed ? "success" : "fail"}`}
+            >
+              <span>{challenges[idx]?.icon}</span>
+
+              <span>
+                {result.passed
+                  ? `${(result.timeMs / 1000).toFixed(1)}s`
+                  : "timeout"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
