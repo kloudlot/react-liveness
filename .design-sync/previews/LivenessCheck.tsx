@@ -2,13 +2,14 @@ import React from 'react';
 import { LivenessCheck } from '@kloudlot/react-liveness';
 
 export function Default() {
-  return <LivenessCheck orgLabel="Marham HQ" />;
+  return <LivenessCheck brandLabel="Attest" orgLabel="Marham HQ" />;
 }
 
 export function BrandTheme() {
   return (
     <LivenessCheck
-      orgLabel="Marham HQ"
+      brandLabel="Kloudlot"
+      orgLabel="Lagos HQ"
       theme={{
         primary: '#7c5cff',
         danger: '#ff6b6b',
@@ -18,5 +19,11 @@ export function BrandTheme() {
 }
 
 export function CustomChallengeCount() {
-  return <LivenessCheck orgLabel="Marham HQ" numberOfChallenge={2} />;
+  return (
+    <LivenessCheck
+      brandLabel="Attest"
+      orgLabel="Marham HQ"
+      numberOfChallenge={4}
+    />
+  );
 }

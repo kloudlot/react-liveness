@@ -13,18 +13,17 @@ import { useLivenessAudio } from "../hooks/useLivenessAudio";
 import { pickChallenges } from "../challenges";
 import { captureFrame } from "../utils/captureFrame";
 
-import {
-  Camera,
-  LoaderCircle,
-  AlertTriangle,
-  CircleCheckBig,
-  CircleX,
-  ScanFace,
-} from "lucide-react";
+import { Camera, LoaderCircle, CircleAlert } from "lucide-react";
 
 const VIDEO_W = 480;
 const VIDEO_H = 360;
-const RING_R = 46;
+
+// Ring geometry, in the proportions of the reference design: the progress ring
+// sits just outside the camera circle with a small gap.
+const RING_SIZE = 288;
+const RING_R = 138;
+const RING_STROKE = 6;
+const CIRCLE_SIZE = 248;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_R;
 
 export interface LivenessTheme {
@@ -44,19 +43,20 @@ export interface LivenessStyles {
   titleGroup?: React.CSSProperties;
   statusDot?: React.CSSProperties;
   title?: React.CSSProperties;
-  subtitle?: React.CSSProperties;
-  secureBadge?: React.CSSProperties;
+  orgBadge?: React.CSSProperties;
   errorBanner?: React.CSSProperties;
   cameraShell?: React.CSSProperties;
+  ringWrap?: React.CSSProperties;
   cameraFrame?: React.CSSProperties;
   video?: React.CSSProperties;
   faceGuide?: React.CSSProperties;
   liveBadge?: React.CSSProperties;
-  idleOverlay?: React.CSSProperties;
-  loadingOverlay?: React.CSSProperties;
-  resultOverlay?: React.CSSProperties;
-  warningPill?: React.CSSProperties;
-  capturedThumb?: React.CSSProperties;
+  feedLabel?: React.CSSProperties;
+  centerOverlay?: React.CSSProperties;
+  stateLabel?: React.CSSProperties;
+  headline?: React.CSSProperties;
+  headlineTitle?: React.CSSProperties;
+  headlineSubtitle?: React.CSSProperties;
   stepIndicator?: React.CSSProperties;
   stepDot?: React.CSSProperties;
   stepDotActive?: React.CSSProperties;
@@ -64,15 +64,10 @@ export interface LivenessStyles {
   cuePill?: React.CSSProperties;
   cueDot?: React.CSSProperties;
   cueText?: React.CSSProperties;
-  cancelLink?: React.CSSProperties;
-  instructionCard?: React.CSSProperties;
-  instructionIcon?: React.CSSProperties;
-  instructionText?: React.CSSProperties;
+  identityRow?: React.CSSProperties;
   actionWrapper?: React.CSSProperties;
   actionButton?: React.CSSProperties;
-  resultList?: React.CSSProperties;
-  resultPill?: React.CSSProperties;
-  identityRow?: React.CSSProperties;
+  cancelLink?: React.CSSProperties;
   fallbackLink?: React.CSSProperties;
 }
 
@@ -85,28 +80,30 @@ const defaultStyles: LivenessStyles = {
     maxWidth: 420,
     margin: "auto",
     background:
-      "radial-gradient(140% 90% at 50% -10%, color-mix(in srgb, var(--live-primary, #6ee7c4) 14%, var(--live-bg, #0c0e13)) 0%, var(--live-bg, #0c0e13) 55%, var(--live-bg-deep, #090a0e) 100%)",
+      "radial-gradient(135% 80% at 50% -8%, color-mix(in srgb, var(--live-primary, #6ee7c4) 16%, var(--live-bg, #0c0e13)) 0%, var(--live-bg, #0c0e13) 52%, var(--live-bg-deep, #090a0e) 100%)",
     border: "1px solid var(--live-border, rgba(255, 255, 255, 0.08))",
     borderRadius: 32,
     overflow: "hidden",
     boxShadow: "0 24px 60px rgba(0, 0, 0, 0.45)",
     fontFamily: FONT_SANS,
     position: "relative",
+    display: "flex",
+    flexDirection: "column",
   },
   header: {
-    padding: "20px 24px",
+    padding: "22px 26px 0",
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
   },
   titleGroup: {
     display: "flex",
-    gap: 10,
+    gap: 9,
     alignItems: "center",
   },
   statusDot: {
-    width: 10,
-    height: 10,
+    width: 11,
+    height: 11,
     borderRadius: "50%",
     background: "var(--live-primary, #6ee7c4)",
     boxShadow: "0 0 12px var(--live-primary, #6ee7c4)",
@@ -117,17 +114,11 @@ const defaultStyles: LivenessStyles = {
     fontSize: 17,
     fontWeight: 600,
     letterSpacing: "-0.01em",
-    color: "var(--live-text, #f4f7f5)",
+    color: "var(--live-text, #f2f4f2)",
   },
-  subtitle: {
-    margin: 0,
-    color: "var(--live-muted, #8f9d97)",
-    fontSize: 12,
-  },
-  secureBadge: {
-    display: "flex",
-    alignItems: "center",
+  orgBadge: {
     fontFamily: FONT_MONO,
+    fontWeight: 500,
     textTransform: "uppercase",
     letterSpacing: "0.1em",
     color: "var(--live-muted, #8a9a94)",
@@ -137,11 +128,11 @@ const defaultStyles: LivenessStyles = {
     fontSize: 10,
   },
   errorBanner: {
-    padding: "12px 20px",
-    margin: "0 20px 16px",
-    background: "color-mix(in srgb, var(--live-danger, #ff8f73) 12%, transparent)",
-    border: "1px solid color-mix(in srgb, var(--live-danger, #ff8f73) 30%, transparent)",
-    borderRadius: 12,
+    padding: "11px 16px",
+    margin: "16px 24px 0",
+    background: "color-mix(in srgb, var(--live-danger, #ff8f73) 10%, transparent)",
+    border: "1px solid color-mix(in srgb, var(--live-danger, #ff8f73) 22%, transparent)",
+    borderRadius: 14,
     color: "var(--live-danger, #ff8f73)",
     display: "flex",
     alignItems: "center",
@@ -149,18 +140,29 @@ const defaultStyles: LivenessStyles = {
     fontSize: 13,
   },
   cameraShell: {
-    padding: "8px 24px 24px",
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "18px 20px 4px",
+  },
+  ringWrap: {
+    position: "relative",
+    width: RING_SIZE,
+    height: RING_SIZE,
+    maxWidth: "100%",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
   },
   cameraFrame: {
     position: "relative",
-    width: 260,
-    height: 260,
+    width: CIRCLE_SIZE,
+    height: CIRCLE_SIZE,
     borderRadius: "50%",
-    background: "#05060a",
     overflow: "hidden",
+    background: "#14161b",
+    boxShadow: "inset 0 0 46px rgba(0, 0, 0, 0.55)",
   },
   video: {
     width: "100%",
@@ -172,17 +174,20 @@ const defaultStyles: LivenessStyles = {
     position: "absolute",
     top: "50%",
     left: "50%",
-    width: 132,
-    height: 168,
+    width: 140,
+    height: 176,
     borderRadius: "50% 50% 47% 47%",
-    border: "1.6px dashed color-mix(in srgb, var(--live-primary, #6ee7c4) 55%, transparent)",
+    border: "1.6px dashed color-mix(in srgb, var(--live-primary, #6ee7c4) 50%, transparent)",
     transform: "translate(-50%, -52%)",
     transition: "border-color 0.3s ease",
   },
   liveBadge: {
+    // Centred rather than corner-pinned: inside a circular mask a top-left
+    // corner falls outside the clip and the label gets cut off.
     position: "absolute",
-    top: 14,
-    left: 14,
+    top: 20,
+    left: "50%",
+    transform: "translateX(-50%)",
     display: "flex",
     alignItems: "center",
     gap: 6,
@@ -190,74 +195,62 @@ const defaultStyles: LivenessStyles = {
     fontWeight: 700,
     fontSize: 9,
     letterSpacing: "0.14em",
-    color: "rgba(255, 255, 255, 0.55)",
+    color: "rgba(255, 255, 255, 0.5)",
   },
-  idleOverlay: {
+  feedLabel: {
     position: "absolute",
-    inset: 0,
-    display: "flex",
-    gap: 12,
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
+    bottom: 22,
+    left: 0,
+    right: 0,
     textAlign: "center",
-    padding: "0 24px",
-    color: "var(--live-text, #f4f7f5)",
-    background: "rgba(9, 10, 14, 0.55)",
+    fontFamily: FONT_MONO,
+    fontWeight: 500,
+    fontSize: 10,
+    letterSpacing: "0.16em",
+    color: "rgba(255, 255, 255, 0.32)",
   },
-  loadingOverlay: {
+  centerOverlay: {
     position: "absolute",
     inset: 0,
     display: "flex",
-    gap: 12,
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    color: "var(--live-text, #f4f7f5)",
-    background: "rgba(9, 10, 14, 0.55)",
-  },
-  warningPill: {
-    position: "absolute",
-    bottom: 14,
-    left: "50%",
-    transform: "translateX(-50%)",
-    display: "flex",
-    gap: 8,
-    padding: "8px 14px",
-    borderRadius: 999,
-    background: "rgba(0, 0, 0, 0.7)",
-    color: "white",
-    fontSize: 12,
-    whiteSpace: "nowrap",
-  },
-  resultOverlay: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    gap: 12,
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "white",
+    gap: 14,
     textAlign: "center",
-    padding: "0 20px",
+    padding: "0 28px",
+    color: "var(--live-text, #f4f7f5)",
   },
-  capturedThumb: {
-    position: "absolute",
-    bottom: 14,
-    right: 14,
-    width: 56,
-    height: 56,
-    borderRadius: 12,
-    overflow: "hidden",
-    border: "2px solid white",
+  stateLabel: {
+    fontFamily: FONT_MONO,
+    fontWeight: 500,
+    fontSize: 10,
+    letterSpacing: "0.16em",
+  },
+  headline: {
+    flex: "none",
+    padding: "6px 34px 0",
+    textAlign: "center",
+  },
+  headlineTitle: {
+    margin: 0,
+    fontSize: 26,
+    fontWeight: 600,
+    letterSpacing: "-0.01em",
+    color: "var(--live-text, #f4f7f5)",
+  },
+  headlineSubtitle: {
+    margin: "8px 0 0",
+    fontSize: 14,
+    lineHeight: 1.45,
+    color: "var(--live-muted, #93a19b)",
   },
   stepIndicator: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     justifyContent: "center",
-    padding: "18px 20px 0",
+    padding: "20px 20px 0",
   },
   stepDot: {
     width: 8,
@@ -265,6 +258,7 @@ const defaultStyles: LivenessStyles = {
     borderRadius: "50%",
     background: "var(--live-border, rgba(255, 255, 255, 0.16))",
     transition: "all 0.2s",
+    flex: "none",
   },
   stepDotActive: {
     width: 24,
@@ -275,6 +269,7 @@ const defaultStyles: LivenessStyles = {
   },
   stepCounter: {
     fontFamily: FONT_MONO,
+    fontWeight: 500,
     fontSize: 10,
     letterSpacing: "0.12em",
     color: "var(--live-muted, #6c7c75)",
@@ -288,7 +283,7 @@ const defaultStyles: LivenessStyles = {
     border: "1px solid var(--live-border, rgba(255, 255, 255, 0.08))",
     padding: "9px 15px",
     borderRadius: 22,
-    margin: "14px auto 0",
+    margin: "15px auto 0",
     width: "fit-content",
   },
   cueDot: {
@@ -304,10 +299,42 @@ const defaultStyles: LivenessStyles = {
     letterSpacing: "0.04em",
     color: "var(--live-muted, #b9c6c0)",
   },
+  identityRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexWrap: "wrap",
+    gap: 12,
+    background: "color-mix(in srgb, var(--live-primary, #6ee7c4) 8%, transparent)",
+    border: "1px solid color-mix(in srgb, var(--live-primary, #6ee7c4) 20%, transparent)",
+    padding: "12px 18px",
+    borderRadius: 16,
+    margin: "18px 26px 0",
+    fontFamily: FONT_MONO,
+    fontSize: 11,
+    color: "var(--live-muted, #8fb8ad)",
+  },
+  actionWrapper: {
+    padding: "20px 26px 0",
+  },
+  actionButton: {
+    width: "100%",
+    border: "none",
+    borderRadius: 16,
+    background: "var(--live-primary, #6ee7c4)",
+    color: "var(--live-on-primary, #06231b)",
+    fontSize: 16,
+    fontWeight: 600,
+    padding: 16,
+    cursor: "pointer",
+    fontFamily: FONT_SANS,
+    boxShadow: "0 12px 30px -10px color-mix(in srgb, var(--live-primary, #6ee7c4) 50%, transparent)",
+  },
   cancelLink: {
     display: "block",
     textAlign: "center",
-    margin: "14px auto 0",
+    margin: "15px auto 0",
+    padding: 0,
     fontSize: 13,
     fontWeight: 500,
     color: "var(--live-muted, #6c7c75)",
@@ -316,80 +343,11 @@ const defaultStyles: LivenessStyles = {
     cursor: "pointer",
     fontFamily: FONT_SANS,
   },
-  instructionCard: {
-    margin: "16px 20px 20px",
-    padding: 18,
-    borderRadius: 20,
-    border: "1px solid var(--live-border, rgba(255, 255, 255, 0.08))",
-    display: "flex",
-    gap: 16,
-    alignItems: "center",
-    background: "rgba(255, 255, 255, 0.03)",
-  },
-  instructionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    background: "color-mix(in srgb, var(--live-primary, #6ee7c4) 12%, transparent)",
-    display: "grid",
-    placeItems: "center",
-    color: "var(--live-primary, #6ee7c4)",
-    flex: "none",
-  },
-  instructionText: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-  },
-  actionWrapper: {
-    padding: "0 20px 20px",
-  },
-  actionButton: {
-    width: "100%",
-    height: 52,
-    border: "none",
-    borderRadius: 16,
-    background: "var(--live-primary, #6ee7c4)",
-    color: "var(--live-on-primary, #06231b)",
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: "pointer",
-    fontFamily: FONT_SANS,
-    boxShadow: "0 12px 30px -10px color-mix(in srgb, var(--live-primary, #6ee7c4) 50%, transparent)",
-  },
-  resultList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    padding: "0 20px 20px",
-  },
-  resultPill: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "12px 16px",
-    borderRadius: 12,
-    fontSize: 14,
-    fontWeight: 600,
-  },
-  identityRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    background: "color-mix(in srgb, var(--live-primary, #6ee7c4) 8%, transparent)",
-    border: "1px solid color-mix(in srgb, var(--live-primary, #6ee7c4) 20%, transparent)",
-    padding: "12px 18px",
-    borderRadius: 16,
-    margin: "0 20px 16px",
-    fontFamily: FONT_MONO,
-    fontSize: 11,
-    color: "var(--live-muted, #8fb8ad)",
-  },
   fallbackLink: {
     display: "block",
     textAlign: "center",
-    margin: "0 20px 20px",
+    margin: "13px auto 0",
+    padding: 0,
     fontSize: 13,
     fontWeight: 500,
     color: "var(--live-muted, #8a7a74)",
@@ -406,8 +364,12 @@ const INJECTED_STYLES = `
     to { transform: rotate(360deg); }
   }
   @keyframes liveness-pulse {
-    0%, 100% { transform: translate(-50%, -50%) scale(1); }
-    50% { transform: translate(-50%, -50%) scale(1.03); }
+    0%, 100% { transform: translate(-50%, -52%) scale(1); }
+    50% { transform: translate(-50%, -52%) scale(1.03); }
+  }
+  @keyframes liveness-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
   }
 `;
 
@@ -416,7 +378,7 @@ export interface LivenessCheckProps {
    * Called when the session ends (pass or fail).
    * @param passed   true if all challenges completed in time
    * @param results  per-challenge breakdown
-   * @param frame    captured photo at moment of completion (only when passed)
+   * @param frame    captured photo at moment of completion
    */
   onComplete?: (
     passed: boolean,
@@ -437,17 +399,22 @@ export interface LivenessCheckProps {
   /** Override the pool challenges are drawn from. */
   challengePool?: Challenge[];
   /**
-   * Text shown in the header badge (e.g. an organization or location name).
+   * Product/brand name shown at the top left.
+   * @default "Liveness"
+   */
+  brandLabel?: string;
+  /**
+   * Organization or location shown in the header pill (rendered uppercase).
    * @default "Secure"
    */
   orgLabel?: string;
-  /** Employee/user name shown on the success screen, if provided. */
+  /** Person's name shown on the result screen, if provided. */
   employeeName?: string;
-  /** Employee/user id shown on the success screen, if provided. */
+  /** Person's id shown on the result screen, if provided. */
   employeeId?: string;
   /** Called when "Cancel" is tapped mid-session. Defaults to resetting the session. */
   onCancel?: () => void;
-  /** Called when "Verify with a supervisor instead" is tapped after a failure. Hidden if omitted. */
+  /** Called when the supervisor-fallback link is tapped after a failure. Hidden if omitted. */
   onFallback?: () => void;
 }
 
@@ -458,6 +425,7 @@ export function LivenessCheck({
   styles: customStyles,
   numberOfChallenge = 3,
   challengePool,
+  brandLabel = "Liveness",
   orgLabel = "Secure",
   employeeName,
   employeeId,
@@ -493,14 +461,9 @@ export function LivenessCheck({
   const [status, setStatus] = useState<ChallengeStatus>("idle");
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [faceDetected, setFaceDetected] = useState(false);
-  const [landmarks, setLandmarks] = useState<
-    { x: number; y: number; z: number }[]
-  >([]);
   const [challengePassed, setChallengePassed] = useState(false);
   const [instructionKey, setInstructionKey] = useState(0);
-  const [capturedFrame, setCapturedFrame] = useState<CapturedFrame | null>(
-    null,
-  );
+  const [completedAt, setCompletedAt] = useState<Date | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const challengeStartRef = useRef<number>(0);
@@ -542,7 +505,11 @@ export function LivenessCheck({
 
       const idx = currentIndexRef.current;
       const challenge = challengesRef.current[idx];
-      if (!challenge) return;
+      if (!challenge) {
+        // Nothing to advance past — release the lock so the session can't wedge.
+        advancingRef.current = false;
+        return;
+      }
 
       const result: ChallengeResult = {
         type: challenge.type,
@@ -573,31 +540,24 @@ export function LivenessCheck({
             const sessionPassed = allResults.every((r) => r.passed);
             setStatus(sessionPassed ? "complete" : "failed");
             statusRef.current = sessionPassed ? "complete" : "failed";
+            setCompletedAt(new Date());
+
+            // Capture the frame while the video is still live. Useful on failure
+            // too — it's evidence for fraud review.
+            const frame = videoRef.current
+              ? captureFrame(videoRef.current, {
+                  format: "image/jpeg",
+                  quality: 0.88,
+                })
+              : null;
 
             if (sessionPassed) {
               audio.announceComplete();
-              // Capture the frame right now while the video is still live
-              const frame = videoRef.current
-                ? captureFrame(videoRef.current, {
-                    format: "image/jpeg",
-                    quality: 0.88,
-                  })
-                : null;
-              if (frame) setCapturedFrame(frame);
-              onComplete?.(true, allResults, frame ?? undefined);
             } else {
               audio.announceFail();
-              // Still capture the frame on failure — it’s useful for fraud detection
-              const frame = videoRef.current
-                ? captureFrame(videoRef.current, {
-                    format: "image/jpeg",
-                    quality: 0.88,
-                  })
-                : null;
-              if (frame) setCapturedFrame(frame);
-              onComplete?.(false, allResults, frame ?? undefined);
             }
-            // onComplete?.(sessionPassed, allResults);
+
+            onComplete?.(sessionPassed, allResults, frame ?? undefined);
             // No unlock needed — session is over
           } else {
             setCurrentIndex(nextIdx);
@@ -649,14 +609,12 @@ export function LivenessCheck({
     ({
       blendshapes,
       faceDetected: fd,
-      landmarks: lm,
     }: {
       blendshapes: BlendshapeMap;
       faceDetected: boolean;
       landmarks: { x: number; y: number; z: number }[];
     }) => {
       setFaceDetected(fd);
-      setLandmarks(lm);
 
       if (statusRef.current !== "detecting") return;
 
@@ -698,11 +656,12 @@ export function LivenessCheck({
     setCurrentIndex(0);
     currentIndexRef.current = 0;
     setChallengePassed(false);
+    setCompletedAt(null);
     setStatus("waiting");
     statusRef.current = "waiting";
 
     await startCamera();
-  }, [startCamera]);
+  }, [startCamera, numberOfChallenge, challengePool]);
 
   useEffect(() => {
     if (isCameraReady && !isModelLoading && status === "waiting") {
@@ -722,10 +681,10 @@ export function LivenessCheck({
     resultsRef.current = [];
     setCurrentIndex(0);
     setChallengePassed(false);
+    setCompletedAt(null);
     setStatus("idle");
     statusRef.current = "idle";
     setFaceDetected(false);
-    setLandmarks([]);
   }, [stopDetection, stopCamera]);
 
   const handleCancel = useCallback(() => {
@@ -757,13 +716,13 @@ export function LivenessCheck({
     : 0;
 
   // Progress ring: 0 while idle/waiting, live per-challenge progress while
-  // detecting, and a settled fraction on the done screens (full on success,
-  // proportion-completed on failure — mirrors how far the session got).
+  // detecting, full on success, and the PASSED fraction on failure — using the
+  // attempted fraction instead would draw a full ring on a failed session.
   const ringProgress = isDone
     ? allPassed
       ? 1
       : challenges.length
-        ? results.length / challenges.length
+        ? results.filter((r) => r.passed).length / challenges.length
         : 0
     : status === "detecting"
       ? progressPct / 100
@@ -771,28 +730,51 @@ export function LivenessCheck({
   const ringColor = isFailed
     ? "var(--live-danger, #ff8f73)"
     : "var(--live-primary, #6ee7c4)";
-  const ringOffset = RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, ringProgress)));
+  const ringOffset =
+    RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, ringProgress)));
 
-  // Compute merged styles
+  // The headline below the ring is the component's primary voice — it carries
+  // the current instruction, mirroring the reference design.
+  let headlineTitle = "Ready to verify";
+  let headlineSubtitle = "Allow camera access to begin";
+  if (status === "waiting") {
+    headlineTitle = isCameraReady ? "Almost ready" : "Starting camera";
+    headlineSubtitle = isCameraReady
+      ? "Preparing face detection…"
+      : "Waiting for camera permission…";
+  } else if (status === "detecting" && currentChallenge) {
+    headlineTitle = currentChallenge.instruction;
+    headlineSubtitle = faceDetected
+      ? `Step ${currentIndex + 1} of ${challenges.length}`
+      : "Center your face inside the ring";
+  } else if (isComplete) {
+    headlineTitle = "You're verified";
+    headlineSubtitle = `${results.length} challenge${results.length === 1 ? "" : "s"} completed`;
+  } else if (isFailed) {
+    headlineTitle = "Verification failed";
+    headlineSubtitle = "Some challenges were not completed in time";
+  }
+
   const mergedStyles = {
     root: { ...defaultStyles.root, ...customStyles?.root },
     header: { ...defaultStyles.header, ...customStyles?.header },
     titleGroup: { ...defaultStyles.titleGroup, ...customStyles?.titleGroup },
     statusDot: { ...defaultStyles.statusDot, ...customStyles?.statusDot },
     title: { ...defaultStyles.title, ...customStyles?.title },
-    subtitle: { ...defaultStyles.subtitle, ...customStyles?.subtitle },
-    secureBadge: { ...defaultStyles.secureBadge, ...customStyles?.secureBadge },
+    orgBadge: { ...defaultStyles.orgBadge, ...customStyles?.orgBadge },
     errorBanner: { ...defaultStyles.errorBanner, ...customStyles?.errorBanner },
     cameraShell: { ...defaultStyles.cameraShell, ...customStyles?.cameraShell },
+    ringWrap: { ...defaultStyles.ringWrap, ...customStyles?.ringWrap },
     cameraFrame: { ...defaultStyles.cameraFrame, ...customStyles?.cameraFrame },
     video: { ...defaultStyles.video, ...customStyles?.video },
     faceGuide: { ...defaultStyles.faceGuide, ...customStyles?.faceGuide },
     liveBadge: { ...defaultStyles.liveBadge, ...customStyles?.liveBadge },
-    idleOverlay: { ...defaultStyles.idleOverlay, ...customStyles?.idleOverlay },
-    loadingOverlay: { ...defaultStyles.loadingOverlay, ...customStyles?.loadingOverlay },
-    resultOverlay: { ...defaultStyles.resultOverlay, ...customStyles?.resultOverlay },
-    warningPill: { ...defaultStyles.warningPill, ...customStyles?.warningPill },
-    capturedThumb: { ...defaultStyles.capturedThumb, ...customStyles?.capturedThumb },
+    feedLabel: { ...defaultStyles.feedLabel, ...customStyles?.feedLabel },
+    centerOverlay: { ...defaultStyles.centerOverlay, ...customStyles?.centerOverlay },
+    stateLabel: { ...defaultStyles.stateLabel, ...customStyles?.stateLabel },
+    headline: { ...defaultStyles.headline, ...customStyles?.headline },
+    headlineTitle: { ...defaultStyles.headlineTitle, ...customStyles?.headlineTitle },
+    headlineSubtitle: { ...defaultStyles.headlineSubtitle, ...customStyles?.headlineSubtitle },
     stepIndicator: { ...defaultStyles.stepIndicator, ...customStyles?.stepIndicator },
     stepDot: { ...defaultStyles.stepDot, ...customStyles?.stepDot },
     stepDotActive: { ...defaultStyles.stepDotActive, ...customStyles?.stepDotActive },
@@ -800,166 +782,232 @@ export function LivenessCheck({
     cuePill: { ...defaultStyles.cuePill, ...customStyles?.cuePill },
     cueDot: { ...defaultStyles.cueDot, ...customStyles?.cueDot },
     cueText: { ...defaultStyles.cueText, ...customStyles?.cueText },
-    cancelLink: { ...defaultStyles.cancelLink, ...customStyles?.cancelLink },
-    instructionCard: { ...defaultStyles.instructionCard, ...customStyles?.instructionCard },
-    instructionIcon: { ...defaultStyles.instructionIcon, ...customStyles?.instructionIcon },
-    instructionText: { ...defaultStyles.instructionText, ...customStyles?.instructionText },
+    identityRow: { ...defaultStyles.identityRow, ...customStyles?.identityRow },
     actionWrapper: { ...defaultStyles.actionWrapper, ...customStyles?.actionWrapper },
     actionButton: { ...defaultStyles.actionButton, ...customStyles?.actionButton },
-    resultList: { ...defaultStyles.resultList, ...customStyles?.resultList },
-    resultPill: { ...defaultStyles.resultPill, ...customStyles?.resultPill },
-    identityRow: { ...defaultStyles.identityRow, ...customStyles?.identityRow },
+    cancelLink: { ...defaultStyles.cancelLink, ...customStyles?.cancelLink },
     fallbackLink: { ...defaultStyles.fallbackLink, ...customStyles?.fallbackLink },
   };
 
-  const showIdentityRow = isDone && (employeeName || employeeId);
+  // Success only: the row is styled in the accent colour, which reads as a
+  // pass — showing it under a failed check is contradictory.
+  const showIdentityRow =
+    isComplete && (employeeName || employeeId || completedAt);
+  const showVideo = isCameraReady && !isDone;
 
   return (
     <div className={className} style={{ ...themeVars, ...mergedStyles.root }}>
       <style>{INJECTED_STYLES}</style>
 
-      {/* Header */}
+      {/* Header — brand on the left, organization pill on the right */}
       <header style={mergedStyles.header}>
         <div style={mergedStyles.titleGroup}>
-          <span style={mergedStyles.statusDot} />
-          <div>
-            <h3 style={mergedStyles.title}>Liveness Verification</h3>
-            <p style={mergedStyles.subtitle}>Biometric identity confirmation</p>
-          </div>
+          <span
+            style={{
+              ...mergedStyles.statusDot,
+              ...(isFailed
+                ? {
+                    background: "var(--live-danger, #ff8f73)",
+                    boxShadow: "0 0 12px var(--live-danger, #ff8f73)",
+                  }
+                : {}),
+            }}
+          />
+          <h3 style={mergedStyles.title}>{brandLabel}</h3>
         </div>
 
-        <div style={mergedStyles.secureBadge}>{orgLabel}</div>
+        <div style={mergedStyles.orgBadge}>{orgLabel}</div>
       </header>
 
       {/* Errors */}
       {(cameraError || modelError) && (
         <div style={mergedStyles.errorBanner}>
-          <AlertTriangle size={16} />
+          <CircleAlert size={16} style={{ flex: "none" }} />
           <span>{cameraError || modelError}</span>
         </div>
       )}
 
-      {/* Camera Section */}
+      {/* Camera circle inside the progress ring */}
       <section style={mergedStyles.cameraShell}>
-        <div style={mergedStyles.cameraFrame}>
-          {/* Progress ring */}
+        <div style={mergedStyles.ringWrap}>
           <svg
-            width="100%"
-            height="100%"
-            viewBox="0 0 100 100"
-            style={{ position: "absolute", inset: 0, transform: "rotate(-90deg)" }}
+            width={RING_SIZE}
+            height={RING_SIZE}
+            viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+            style={{
+              position: "absolute",
+              inset: 0,
+              maxWidth: "100%",
+              transform: "rotate(-90deg)",
+            }}
           >
             <circle
-              cx="50"
-              cy="50"
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
               r={RING_R}
               fill="none"
               stroke="var(--live-border, rgba(255, 255, 255, 0.08))"
-              strokeWidth="4"
+              strokeWidth={RING_STROKE}
             />
             <circle
-              cx="50"
-              cy="50"
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
               r={RING_R}
               fill="none"
               stroke={ringColor}
-              strokeWidth="4"
+              strokeWidth={RING_STROKE}
               strokeLinecap="round"
               strokeDasharray={RING_CIRCUMFERENCE}
               strokeDashoffset={ringOffset}
-              style={{ transition: "stroke-dashoffset 0.1s linear, stroke 0.3s ease" }}
+              style={{
+                transition: "stroke-dashoffset 0.1s linear, stroke 0.3s ease",
+              }}
             />
           </svg>
 
-          {/* Video */}
-          <video
-            ref={videoRef}
-            width={VIDEO_W}
-            height={VIDEO_H}
-            style={mergedStyles.video}
-            playsInline
-            muted
-          />
-
-          {/* Live badge */}
-          {isCameraReady && (isActive || isDone) && (
-            <div style={mergedStyles.liveBadge}>
-              <span
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: "var(--live-danger, #ff8f73)",
-                }}
-              />
-              LIVE
-            </div>
-          )}
-
-          {/* Face guide */}
-          {(isActive || isDone) && (
-            <div
+          <div style={mergedStyles.cameraFrame}>
+            <video
+              ref={videoRef}
+              width={VIDEO_W}
+              height={VIDEO_H}
               style={{
-                ...mergedStyles.faceGuide,
-                ...(faceDetected ? { borderColor: "var(--live-success, #6ee7c4)", animation: "liveness-pulse 1.5s infinite" } : {}),
-                ...(challengePassed ? { borderColor: "var(--live-success, #6ee7c4)", backgroundColor: "color-mix(in srgb, var(--live-success, #6ee7c4) 15%, transparent)" } : {}),
+                ...mergedStyles.video,
+                visibility: showVideo ? "visible" : "hidden",
               }}
+              playsInline
+              muted
             />
-          )}
 
-          {/* Idle overlay */}
-          {status === "idle" && (
-            <div style={mergedStyles.idleOverlay}>
-              <Camera size={44} />
-              <h3 style={{ margin: 0, fontSize: 17 }}>Camera Required</h3>
-              <p style={{ margin: 0, opacity: 0.8, fontSize: 13 }}>Allow camera access to start verification</p>
-            </div>
-          )}
-
-          {/* Loading overlay */}
-          {status === "waiting" && (
-            <div style={mergedStyles.loadingOverlay}>
-              <LoaderCircle size={40} style={{ animation: "liveness-spin 1s linear infinite" }} />
-              <p style={{ margin: 0, fontSize: 13 }}>
-                {!isCameraReady
-                  ? "Starting camera..."
-                  : "Preparing face detection..."}
-              </p>
-            </div>
-          )}
-
-          {/* Warning */}
-          {status === "detecting" && !faceDetected && (
-            <div style={mergedStyles.warningPill}>
-              <AlertTriangle size={14} color="var(--live-warning, #ff8f73)" />
-              Center your face in the frame
-            </div>
-          )}
-
-          {/* Success / Fail Overlay */}
-          {isDone && (
-            <div style={{ ...mergedStyles.resultOverlay, background: allPassed ? "rgba(6, 35, 27, 0.82)" : "rgba(58, 26, 20, 0.82)" }}>
-              {allPassed ? <CircleCheckBig size={64} color="var(--live-success, #6ee7c4)" /> : <CircleX size={64} color="var(--live-danger, #ff8f73)" />}
-
-              <h2 style={{ margin: 0, fontSize: 19 }}>
-                {allPassed ? "You're verified" : "Verification Failed"}
-              </h2>
-
-              <p style={{ margin: 0, opacity: 0.9, fontSize: 13 }}>
-                {allPassed
-                  ? `${results.length} challenges completed`
-                  : "Some challenges were not completed"}
-              </p>
-
-              {capturedFrame && (
-                <div style={mergedStyles.capturedThumb}>
-                  <img src={capturedFrame.dataUrl} alt="Captured" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            {/* Face guide + live badge, while the camera is actually running */}
+            {showVideo && (
+              <>
+                <div
+                  style={{
+                    ...mergedStyles.faceGuide,
+                    ...(faceDetected
+                      ? {
+                          borderColor: "var(--live-success, #6ee7c4)",
+                          animation: "liveness-pulse 1.5s infinite",
+                        }
+                      : {}),
+                    ...(challengePassed
+                      ? {
+                          borderColor: "var(--live-success, #6ee7c4)",
+                          backgroundColor:
+                            "color-mix(in srgb, var(--live-success, #6ee7c4) 15%, transparent)",
+                        }
+                      : {}),
+                  }}
+                />
+                <div style={mergedStyles.liveBadge}>
+                  <span
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: "var(--live-danger, #ff8f73)",
+                      animation: "liveness-blink 1.4s infinite",
+                    }}
+                  />
+                  LIVE
                 </div>
-              )}
-            </div>
-          )}
+              </>
+            )}
+
+            {/* Idle */}
+            {status === "idle" && (
+              <div style={mergedStyles.centerOverlay}>
+                <Camera size={44} strokeWidth={1.5} />
+                <span
+                  style={{
+                    ...mergedStyles.stateLabel,
+                    color: "rgba(255, 255, 255, 0.32)",
+                  }}
+                >
+                  CAMERA OFF
+                </span>
+              </div>
+            )}
+
+            {/* Waiting */}
+            {status === "waiting" && (
+              <div style={mergedStyles.centerOverlay}>
+                <LoaderCircle
+                  size={40}
+                  strokeWidth={1.5}
+                  style={{ animation: "liveness-spin 1s linear infinite" }}
+                />
+              </div>
+            )}
+
+            {/* Result */}
+            {isDone && (
+              <div style={mergedStyles.centerOverlay}>
+                {allPassed ? (
+                  <svg width="88" height="88" viewBox="0 0 96 96" aria-hidden="true">
+                    <circle
+                      cx="48"
+                      cy="48"
+                      r="43"
+                      fill="none"
+                      stroke="var(--live-success, #6ee7c4)"
+                      strokeWidth="4"
+                    />
+                    <path
+                      d="M31 49 L43 61 L66 34"
+                      fill="none"
+                      stroke="var(--live-success, #6ee7c4)"
+                      strokeWidth="6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : (
+                  <svg width="80" height="80" viewBox="0 0 86 86" aria-hidden="true">
+                    <circle
+                      cx="43"
+                      cy="43"
+                      r="38"
+                      fill="none"
+                      stroke="var(--live-danger, #ff8f73)"
+                      strokeWidth="4.5"
+                    />
+                    <line
+                      x1="43"
+                      y1="26"
+                      x2="43"
+                      y2="48"
+                      stroke="var(--live-danger, #ff8f73)"
+                      strokeWidth="6"
+                      strokeLinecap="round"
+                    />
+                    <circle cx="43" cy="60" r="3.4" fill="var(--live-danger, #ff8f73)" />
+                  </svg>
+                )}
+                <span
+                  style={{
+                    ...mergedStyles.stateLabel,
+                    color: allPassed
+                      ? "color-mix(in srgb, var(--live-success, #6ee7c4) 75%, transparent)"
+                      : "color-mix(in srgb, var(--live-danger, #ff8f73) 75%, transparent)",
+                  }}
+                >
+                  {allPassed ? "VERIFIED" : "NOT VERIFIED"}
+                </span>
+              </div>
+            )}
+
+            {/* Feed label, only while the live feed is showing */}
+            {showVideo && <div style={mergedStyles.feedLabel}>CAMERA FEED</div>}
+          </div>
         </div>
       </section>
+
+      {/* Headline — the instruction lives below the ring, per the design */}
+      <div style={mergedStyles.headline} key={instructionKey}>
+        <div style={mergedStyles.headlineTitle}>{headlineTitle}</div>
+        <p style={mergedStyles.headlineSubtitle}>{headlineSubtitle}</p>
+      </div>
 
       {/* Step indicator */}
       {challenges.length > 0 && !isDone && (
@@ -968,16 +1016,19 @@ export function LivenessCheck({
             const done = i < currentIndex;
             const active = i === currentIndex;
             const res = results[i];
-            const failedStep = done && res && !res.passed;
 
             return (
               <span
-                key={challenge.type + i}
+                key={`${challenge.type}-${i}`}
                 style={{
                   ...mergedStyles.stepDot,
                   ...(active ? mergedStyles.stepDotActive : {}),
-                  ...(failedStep ? { background: "var(--live-danger, #ff8f73)" } : {}),
-                  ...(done && res?.passed ? { background: "var(--live-success, #6ee7c4)" } : {}),
+                  ...(done && res?.passed
+                    ? { background: "var(--live-success, #6ee7c4)" }
+                    : {}),
+                  ...(done && res && !res.passed
+                    ? { background: "var(--live-danger, #ff8f73)" }
+                    : {}),
                 }}
               />
             );
@@ -988,95 +1039,83 @@ export function LivenessCheck({
         </div>
       )}
 
-      {/* Instruction Card */}
-      {isActive && currentChallenge && status === "detecting" && (
-        <div style={mergedStyles.instructionCard} key={instructionKey}>
-          <div style={mergedStyles.instructionIcon}>
-            <ScanFace size={22} />
-          </div>
-
-          <div style={mergedStyles.instructionText}>
-            <h4 style={{ margin: 0, fontSize: 15, color: "var(--live-text, #f4f7f5)" }}>{currentChallenge.instruction}</h4>
-            <p style={{ margin: 0, fontSize: 12, color: "var(--live-muted, #93a19b)" }}>
-              Step {currentIndex + 1} of {challenges.length}
-            </p>
-          </div>
+      {/* Cue pill */}
+      {isActive && (
+        <div style={mergedStyles.cuePill}>
+          <span style={mergedStyles.cueDot} />
+          <span style={mergedStyles.cueText}>Voice guidance on each step</span>
         </div>
       )}
 
-      {/* Cue pill + cancel (active session) */}
-      {isActive && (
-        <>
-          <div style={mergedStyles.cuePill}>
-            <span style={mergedStyles.cueDot} />
-            <span style={mergedStyles.cueText}>Voice guidance on each step</span>
-          </div>
-          <button type="button" style={mergedStyles.cancelLink} onClick={handleCancel}>
-            Cancel
-          </button>
-        </>
-      )}
-
-      {/* Identity row (done screens, only if identity provided) */}
+      {/* Identity / timestamp row */}
       {showIdentityRow && (
         <div style={mergedStyles.identityRow}>
-          {employeeName && <span>{employeeName}</span>}
-          {employeeName && employeeId && <span style={{ width: 1, height: 14, background: "var(--live-border)" }} />}
+          {employeeName && (
+            <span style={{ color: "var(--live-text, #e9f4ef)", fontWeight: 600 }}>
+              {employeeName}
+            </span>
+          )}
+          {employeeName && employeeId && (
+            <span
+              style={{
+                width: 1,
+                height: 14,
+                background: "var(--live-border, rgba(255, 255, 255, 0.14))",
+              }}
+            />
+          )}
           {employeeId && <span>{employeeId}</span>}
+          {(employeeName || employeeId) && completedAt && (
+            <span
+              style={{
+                width: 1,
+                height: 14,
+                background: "var(--live-border, rgba(255, 255, 255, 0.14))",
+              }}
+            />
+          )}
+          {completedAt && (
+            <span>
+              {completedAt.toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </span>
+          )}
         </div>
       )}
 
-      {/* Idle CTA */}
-      {status === "idle" && (
+      {/* Primary action */}
+      {(status === "idle" || isDone) && (
         <div style={mergedStyles.actionWrapper}>
-          <button style={mergedStyles.actionButton} onClick={handleStart}>
-            Start Verification
+          <button
+            type="button"
+            style={mergedStyles.actionButton}
+            onClick={status === "idle" ? handleStart : handleReset}
+          >
+            {status === "idle"
+              ? "Start Verification"
+              : allPassed
+                ? "Done"
+                : "Try again"}
           </button>
         </div>
       )}
 
-      {/* Done CTA */}
-      {isDone && (
-        <div style={mergedStyles.actionWrapper}>
-          <button style={mergedStyles.actionButton} onClick={handleReset}>
-            {allPassed ? "Done" : "Try Again"}
-          </button>
-        </div>
+      {/* Secondary actions */}
+      {isActive && (
+        <button type="button" style={mergedStyles.cancelLink} onClick={handleCancel}>
+          Cancel
+        </button>
       )}
-
-      {/* Supervisor fallback (failure only) */}
       {isFailed && onFallback && (
         <button type="button" style={mergedStyles.fallbackLink} onClick={onFallback}>
           Verify with a supervisor instead
         </button>
       )}
 
-      {/* Challenge Result Summary */}
-      {isDone && (
-        <div style={mergedStyles.resultList}>
-          {results.map((result, idx) => (
-            <div
-              key={idx}
-              style={{
-                ...mergedStyles.resultPill,
-                background: result.passed ? "color-mix(in srgb, var(--live-success, #6ee7c4) 12%, transparent)" : "color-mix(in srgb, var(--live-danger, #ff8f73) 12%, transparent)",
-                color: result.passed ? "var(--live-success, #6ee7c4)" : "var(--live-danger, #ff8f73)",
-              }}
-            >
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span>{challenges[idx]?.icon}</span>
-                <span>{challenges[idx]?.label || challenges[idx]?.type}</span>
-              </div>
-
-              <span>
-                {result.passed
-                  ? `${(result.timeMs / 1000).toFixed(1)}s`
-                  : "timeout"}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Bottom spacing */}
+      <div style={{ height: 30, flex: "none" }} />
     </div>
   );
 }

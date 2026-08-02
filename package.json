@@ -1,6 +1,6 @@
 {
   "name": "@kloudlot/react-liveness",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Headless React liveness check component using MediaPipe face detection",
   "keywords": [
     "liveness",
@@ -47,7 +47,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/kloudlot/react-liveness"
+    "url": "git+https://github.com/kloudlot/react-liveness.git"
   },
   "dependencies": {
     "lucide-react": "^1.21.0"
