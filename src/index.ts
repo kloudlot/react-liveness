@@ -1,5 +1,6 @@
 // Component
 export { LivenessCheck } from './components/LivenessCheck';
+export type { LivenessCheckProps, LivenessTheme, LivenessStyles } from './components/LivenessCheck';
 
 // Hooks — for headless / custom UI usage
 export { useFaceLandmarker } from './hooks/useFaceLandmarker';
@@ -30,6 +31,4 @@ export type {
   UseFaceLandmarkerReturn,
   UseLivenessAudioReturn,
   UseCameraReturn,
-  // Component props
-  LivenessCheckProps,
 } from './types';

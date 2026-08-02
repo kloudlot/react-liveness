@@ -112,39 +112,3 @@ export interface UseLivenessAudioReturn {
   stop: () => void;
 }
 
-// ---------------------------------------------------------------------------
-// Component prop types
-// ---------------------------------------------------------------------------
-
-export interface LivenessCheckProps {
-  /**
-   * Called when the session ends (pass or fail).
-   * @param passed   true if all challenges completed in time
-   * @param results  per-challenge breakdown
-   * @param frame    captured photo at moment of completion (only when passed)
-   */
-  onComplete?: (passed: boolean, results: ChallengeResult[], frame?: CapturedFrame) => void;
-
-  /**
-   * Override the default challenge set.
-   * If omitted, 3 challenges are randomly picked from the built-in set.
-   */
-  challenges?: Challenge[];
-
-  /**
-   * Number of challenges to pick when using the default set.
-   * @default 3
-   */
-  challengeCount?: number;
-
-  /**
-   * Disable voice instructions and audio feedback.
-   * @default false
-   */
-  muted?: boolean;
-
-  /**
-   * Additional CSS class applied to the root container.
-   */
-  className?: string;
-}
