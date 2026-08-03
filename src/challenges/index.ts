@@ -1,1 +1,1 @@
-export { DEFAULT_CHALLENGES, pickChallenges } from './defaults';
+export { DEFAULT_CHALLENGES, CENTER_FACE_CHALLENGE, pickChallenges } from './defaults';

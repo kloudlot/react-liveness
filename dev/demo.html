@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LivenessCheck — session playground</title>
+<style>
+  :root {
+    --bg: #0c0e13; --surface: #12161a; --border: rgba(255,255,255,.1);
+    --text: #f4f7f5; --muted: #8f9d97; --accent: #6ee7c4;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, sans-serif; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .12em;
+       color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; max-width: 66ch; }
+  .hint code { color: var(--accent); }
+  .wrap { display: grid; grid-template-columns: 440px 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+  .log { background: var(--surface); border: 1px solid var(--border);
+         border-radius: 12px; padding: 12px; max-height: 460px; overflow: auto; }
+  .entry { display: grid; grid-template-columns: 72px 130px 1fr; gap: 10px;
+           padding: 6px 0; border-bottom: 1px solid var(--border);
+           font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .entry:last-child { border-bottom: 0; }
+  .entry .ts { color: var(--muted); }
+  .entry strong { color: var(--accent); font-weight: 600; }
+  .entry .detail { color: var(--text); word-break: break-word; }
+  .empty { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+  .controls { background: var(--surface); border: 1px solid var(--border);
+              border-radius: 12px; padding: 14px; margin-top: 18px; }
+  .controls label { display: block; font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .controls label:first-of-type { margin-top: 0; }
+  .controls select, .controls input { width: 100%; margin-top: 5px; }
+  .controls select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+                     border-radius: 8px; padding: 7px; font-family: ui-monospace, monospace;
+                     font-size: 12px; }
+  .shots { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+  figure { margin: 0; }
+  figure img { width: 220px; border-radius: 10px; border: 1px solid var(--border); display: block; }
+  figcaption { color: var(--muted); font-size: 11px; margin-top: 6px;
+               font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/demo.js"></script>
+</body>
+</html>

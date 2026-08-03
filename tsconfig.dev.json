@@ -1,0 +1,12 @@
+{
+  // Typechecks the calibration harness, which lives outside the published
+  // build. Without this, dev/calibrate.ts would compile via esbuild (which does
+  // not typecheck) and could drift from the utils it is meant to calibrate.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src", "dev"],
+  "exclude": ["node_modules", "dist", "dev/calibrate.js"]
+}

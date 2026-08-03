@@ -1,41 +1,24 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import type {
+  BlendshapeMap,
+  FaceLandmarkerResult,
+  UseFaceLandmarkerOptions,
+} from '../types';
+import { derivePose, deriveGeometry, pickPrimaryFace } from '../utils/facePose';
+import {
+  DEFAULT_WASM_BASE_PATH,
+  DEFAULT_MODEL_ASSET_PATH,
+  DEFAULT_NUM_FACES,
+  faceLandmarkerOptions,
+} from '../utils/mediapipeConfig';
 
-export interface BlendshapeMap {
-  [key: string]: number;
-}
-
-export interface FaceLandmarkerResult {
-  blendshapes: BlendshapeMap;
-  faceDetected: boolean;
-  landmarks: { x: number; y: number; z: number }[];
-}
-
-interface UseFaceLandmarkerOptions {
-  onResult?: (result: FaceLandmarkerResult) => void;
-  enabled?: boolean;
-}
+export type { BlendshapeMap, FaceLandmarkerResult } from '../types';
+export { MEDIAPIPE_WASM_VERSION } from '../utils/mediapipeConfig';
 
 // Sliding-window constants for headNod synthesis
 const NOD_HISTORY_LENGTH = 15;
-
-// ---------------------------------------------------------------------------
-// GPU support detection
-// MediaPipe GPU delegate requires WebGL2 + EXT_color_buffer_float.
-// Mid-range Android devices (e.g. Nokia X20) have WebGL2 but lack the
-// required extension, causing silent init failures. Fall back to CPU.
-// ---------------------------------------------------------------------------
-function supportsGpuDelegate(): boolean {
-  try {
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl2');
-    if (!gl) return false;
-    return !!gl.getExtension('EXT_color_buffer_float');
-  } catch {
-    return false;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // loadMediaPipe — dynamic ES module import, no <Script> tag needed.
@@ -71,7 +54,13 @@ export function useFaceLandmarker(
   videoRef: React.RefObject<HTMLVideoElement | null>,
   options: UseFaceLandmarkerOptions = {}
 ) {
-  const { onResult, enabled = true } = options;
+  const {
+    onResult,
+    enabled = true,
+    numFaces = DEFAULT_NUM_FACES,
+    wasmBasePath = DEFAULT_WASM_BASE_PATH,
+    modelAssetPath = DEFAULT_MODEL_ASSET_PATH,
+  } = options;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const landmarkerRef = useRef<any>(null);
@@ -92,27 +81,20 @@ export function useFaceLandmarker(
 
         if (cancelled) return;
 
-        const filesetResolver = await FilesetResolver.forVisionTasks(
-          // Pin to a specific version to avoid unexpected breaking changes on mobile.
-          // The WASM files are small (~500KB) and cached after the first load.
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-        );
+        // The WASM files are small (~500KB) and cached after the first load.
+        const filesetResolver = await FilesetResolver.forVisionTasks(wasmBasePath);
 
         if (cancelled) return;
 
-        const useGpu = supportsGpuDelegate();
-        console.info(`[useFaceLandmarker] Using ${useGpu ? 'GPU' : 'CPU'} delegate`);
+        const landmarkerOptions = faceLandmarkerOptions({ modelAssetPath, numFaces });
+        console.info(
+          `[useFaceLandmarker] Using ${landmarkerOptions.baseOptions.delegate} delegate`,
+        );
 
-        const faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
-          baseOptions: {
-            modelAssetPath:
-              'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-            delegate: useGpu ? 'GPU' : 'CPU',
-          },
-          outputFaceBlendshapes: true,
-          runningMode: 'VIDEO',
-          numFaces: 1,
-        });
+        const faceLandmarker = await FaceLandmarker.createFromOptions(
+          filesetResolver,
+          landmarkerOptions,
+        );
 
         if (cancelled) {
           faceLandmarker.close();
@@ -141,7 +123,7 @@ export function useFaceLandmarker(
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [enabled, numFaces, wasmBasePath, modelAssetPath]);
 
   const startDetection = useCallback(() => {
     if (!landmarkerRef.current || runningRef.current) return;
@@ -160,16 +142,43 @@ export function useFaceLandmarker(
 
       try {
         const results = landmarkerRef.current.detectForVideo(video, performance.now());
-        const faceDetected = (results.faceLandmarks?.length ?? 0) > 0;
-        const rawBlendshapes = results.faceBlendshapes?.[0]?.categories ?? [];
+        const faces = results.faceLandmarks ?? [];
+        const faceCount = faces.length;
+        const faceDetected = faceCount > 0;
+
+        // With numFaces > 1 MediaPipe gives no ordering guarantee, so resolve
+        // the subject explicitly and index everything off it. Reading [0]
+        // blindly would let a face in the background drive the session.
+        const primary = faceDetected ? pickPrimaryFace(faces) : 0;
+
+        const rawBlendshapes = results.faceBlendshapes?.[primary]?.categories ?? [];
 
         const blendshapes: BlendshapeMap = {};
         for (const b of rawBlendshapes) {
           blendshapes[b.categoryName] = b.score;
         }
 
-        if (faceDetected && results.faceLandmarks?.[0]) {
-          const landmarks = results.faceLandmarks[0];
+        let pose: FaceLandmarkerResult['pose'] = null;
+        let geometry: FaceLandmarkerResult['geometry'] = null;
+
+        if (faceDetected && faces[primary]) {
+          const landmarks = faces[primary];
+
+          pose = derivePose(
+            results.facialTransformationMatrixes?.[primary]?.data,
+            landmarks,
+          );
+          geometry = deriveGeometry(landmarks);
+
+          // Expose pose as synthetic blendshape keys so the existing challenge
+          // engine can express pose conditions with no engine changes. These are
+          // in DEGREES — distinct from the legacy `headYaw` key below, which is a
+          // normalised offset and is kept unchanged for backwards compatibility.
+          if (pose) {
+            blendshapes['headYawDeg'] = pose.yawDeg;
+            blendshapes['headPitchDeg'] = pose.pitchDeg;
+            blendshapes['headRollDeg'] = pose.rollDeg;
+          }
 
           // ── headYaw ──────────────────────────────────────────────────────────
           // Computed in MediaPipe's unmirrored coordinate space.
@@ -210,7 +219,10 @@ export function useFaceLandmarker(
         onResult?.({
           blendshapes,
           faceDetected,
-          landmarks: results.faceLandmarks?.[0] ?? [],
+          landmarks: faces[primary] ?? [],
+          faceCount,
+          pose,
+          geometry,
         });
       } catch {
         // Silently skip frame errors to avoid interrupting the RAF loop

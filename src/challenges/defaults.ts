@@ -67,6 +67,33 @@ export const DEFAULT_CHALLENGES: Challenge[] = [
 ];
 
 /**
+ * An explicit "look straight ahead" step, using the degree-based pose keys.
+ *
+ * Deliberately NOT in DEFAULT_CHALLENGES: holding still is not proof of life,
+ * so counting it as a liveness challenge would overstate what a passing session
+ * demonstrates. Most people want the capture gate (`captureMode:
+ * 'centeredFace'`), which runs every session and picks the best frame rather
+ * than the first qualifying one. Use this only if you specifically want
+ * centring to appear as a numbered step in the sequence.
+ *
+ * Gates yaw and roll only. Pitch carries a large device-dependent offset — the
+ * camera's height relative to the face — so an absolute pitch band would behave
+ * differently on a laptop than on a phone. The capture gate handles pitch
+ * properly by measuring against a per-session baseline.
+ */
+export const CENTER_FACE_CHALLENGE: Challenge = {
+  type: 'CENTER_FACE',
+  label: 'Look straight',
+  instruction: 'Look straight at the camera',
+  icon: '🎯',
+  timeoutMs: 6000,
+  blendshapes: [
+    { key: 'headYawDeg', threshold: 12, compare: 'absBelow' },
+    { key: 'headRollDeg', threshold: 10, compare: 'absBelow' },
+  ],
+};
+
+/**
  * Pick `count` challenges at random from the provided pool.
  * Defaults to DEFAULT_CHALLENGES if no pool is provided.
  */

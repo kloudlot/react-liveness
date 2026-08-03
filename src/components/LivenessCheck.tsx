@@ -3,17 +3,39 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useCamera } from "../hooks/useCamera";
 import { useFaceLandmarker } from "../hooks/useFaceLandmarker";
 import {
-  BlendshapeMap,
   CapturedFrame,
   Challenge,
   ChallengeResult,
   ChallengeStatus,
+  FaceLandmarkerResult,
 } from "../types";
 import { useLivenessAudio } from "../hooks/useLivenessAudio";
 import { pickChallenges } from "../challenges";
 import { captureFrame } from "../utils/captureFrame";
-
+import { useCenteredCapture } from "../hooks/useCenteredCapture";
+import type { CaptureGates } from "../utils/captureGates";
+import { useVerification } from "../hooks/useVerification";
+import type {
+  VerificationPayload,
+  VerificationVerdict,
+  VerifyContext,
+} from "../hooks/useVerification";
 import { Camera, LoaderCircle, CircleAlert } from "lucide-react";
+
+// Read off globalThis rather than as a bare `process.env.NODE_ENV`: this package
+// has no @types/node, and adding a dependency to gate one dev warning is not
+// worth it. The cost is that bundlers cannot statically eliminate the warning,
+// which is a few lines of shipped code.
+const IS_PRODUCTION =
+  (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV ===
+  "production";
+
+/** crypto.randomUUID is unavailable on http origins and older Safari. */
+function newSessionId(): string {
+  const c = typeof crypto !== "undefined" ? crypto : undefined;
+  if (c?.randomUUID) return c.randomUUID();
+  return `ls_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 const VIDEO_W = 480;
 const VIDEO_H = 360;
@@ -358,8 +380,14 @@ const defaultStyles: LivenessStyles = {
   },
 };
 
+// Opt-in, and off by default. An identity-verification widget should not make
+// an unannounced request to a third party the moment it renders — it leaks that
+// a verification is happening, and it hard-fails under the strict CSP that the
+// deployments this package targets tend to run. The font stacks above already
+// fall back to system fonts, so the component looks correct without it.
+const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');`;
+
 const INJECTED_STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
   @keyframes liveness-spin {
     to { transform: rotate(360deg); }
   }
@@ -370,6 +398,14 @@ const INJECTED_STYLES = `
   @keyframes liveness-blink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.25; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-liveness-root] *,
+    [data-liveness-root] *::before,
+    [data-liveness-root] *::after {
+      animation: none !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 `;
 
@@ -416,7 +452,107 @@ export interface LivenessCheckProps {
   onCancel?: () => void;
   /** Called when the supervisor-fallback link is tapped after a failure. Hidden if omitted. */
   onFallback?: () => void;
+  /**
+   * How the photo handed to `onComplete` is chosen.
+   *
+   *   `centeredFace` — run a frontal capture gate after the challenges and hand
+   *     back the best frontal, eyes-open, in-focus frame.
+   *   `onComplete` — legacy behaviour: grab whatever frame is live the instant
+   *     the last challenge resolves. That frame is systematically the worst of
+   *     the session (a TURN finish yields a profile; a BLINK finish yields
+   *     closed eyes), so it is unsuitable for backend face comparison.
+   *   `off` — capture nothing.
+   *
+   * @default 'centeredFace'
+   */
+  captureMode?: "centeredFace" | "onComplete" | "off";
+  /** Threshold overrides for the capture gate, merged over the calibrated defaults. */
+  captureGates?: Partial<CaptureGates>;
+  /** How long every gate must hold before capturing. @default 600 */
+  captureHoldMs?: number;
+  /** Give up on the capture gate after this long, keeping the best frame seen. @default 8000 */
+  captureTimeoutMs?: number;
+  /** Crop the captured image to the face box. @default false */
+  cropToFace?: boolean;
+  /**
+   * Run a short framing step before the challenges. Establishes the per-device
+   * pitch baseline (camera height offsets pitch by a constant that differs
+   * between a laptop and a phone) and yields a second frontal frame the backend
+   * can use as a same-person continuity check.
+   * @default true
+   */
+  alignPhase?: boolean;
+  /**
+   * Fail the session if face tracking drops for longer than
+   * `maxTrackingGapMs` during the capture phase. Without this, the window
+   * between "challenges passed" and "photo taken" is a swap opportunity: pass
+   * the challenges live, then present a photo of someone else.
+   * @default true
+   */
+  continuityGuard?: boolean;
+  /** @default 1200 */
+  maxTrackingGapMs?: number;
+  /** Called with the gated capture, before `onComplete`. */
+  onCapture?: (frame: CapturedFrame) => void;
+  /** Called with the pre-challenge framing frame, when `alignPhase` is on. */
+  onAlignCapture?: (frame: CapturedFrame) => void;
+  /**
+   * Submit the capture to your backend and return its verdict.
+   *
+   * Passing liveness is not the same as being verified: only your backend can
+   * say whether this face matches the enrolled identity. When this is provided,
+   * the session shows "verified" only after it returns `{ status: 'verified' }`.
+   * When omitted, behaviour is unchanged — liveness pass is the final answer.
+   *
+   * Throwing (or rejecting) is reported as `{ status: 'error' }`, which never
+   * counts against `maxAttempts`. For a polling backend, poll inside this
+   * function and call `ctx.setStage()` as it progresses.
+   */
+  onVerify?: (
+    payload: VerificationPayload,
+    ctx: VerifyContext,
+  ) => Promise<VerificationVerdict>;
+  /**
+   * Rejections allowed before retries stop. UX only — see the note on
+   * UseVerificationOptions.maxAttempts; real limits must be server-side.
+   * @default 3
+   */
+  maxAttempts?: number;
+  /** Abort the verify call after this long. @default 30000 */
+  verifyTimeoutMs?: number;
+  /**
+   * Capture-only retries allowed per liveness proof, when the backend rejects
+   * with `low_quality`. Capped because each one yields another photo off a
+   * single liveness proof.
+   * @default 1
+   */
+  maxCaptureRetries?: number;
+  /** Called once per terminal backend verdict. */
+  onSettled?: (verdict: VerificationVerdict) => void;
+  /**
+   * Load Space Grotesk / Space Mono from Google Fonts at render time.
+   *
+   * Off by default: it is an unannounced third-party request from an identity
+   * widget, and it fails outright under a strict CSP. The component falls back
+   * to the system font stack, which is what most deployments should use. Self-
+   * host the fonts if you want the exact reference look under CSP.
+   * @default false
+   */
+  loadFonts?: boolean;
+  /** Accessible name for the widget. @default "Liveness verification" */
+  ariaLabel?: string;
 }
+
+// During alignment the user is only being asked to position themselves, so
+// expression and blink gates are irrelevant — and pitch cannot be gated tightly
+// yet because the baseline it would be measured against is what this phase
+// exists to establish.
+const ALIGN_GATE_OVERRIDES: Partial<CaptureGates> = {
+  maxPitchDeg: 30,
+  maxEyeBlink: 1,
+  maxJawOpen: 1,
+  maxSmile: 1,
+};
 
 export function LivenessCheck({
   onComplete,
@@ -431,6 +567,23 @@ export function LivenessCheck({
   employeeId,
   onCancel,
   onFallback,
+  captureMode = "centeredFace",
+  captureGates,
+  captureHoldMs = 600,
+  captureTimeoutMs = 8000,
+  cropToFace = false,
+  alignPhase = true,
+  continuityGuard = true,
+  maxTrackingGapMs = 1200,
+  onCapture,
+  onAlignCapture,
+  onVerify,
+  maxAttempts = 3,
+  verifyTimeoutMs = 30000,
+  maxCaptureRetries = 1,
+  onSettled,
+  loadFonts = false,
+  ariaLabel = "Liveness verification",
 }: LivenessCheckProps) {
   const {
     videoRef,
@@ -466,12 +619,74 @@ export function LivenessCheck({
   const [completedAt, setCompletedAt] = useState<Date | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The inter-challenge pause in advanceChallenge must be cancellable: it calls
+  // onComplete and setState after firing, so an uncancelled pending timeout
+  // advances a session the user already cancelled, and setStates a component
+  // that may already be unmounted.
+  const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const challengeStartRef = useRef<number>(0);
   const currentIndexRef = useRef(0);
   const statusRef = useRef<ChallengeStatus>("idle");
   const challengesRef = useRef<Challenge[]>([]);
   const resultsRef = useRef<ChallengeResult[]>([]);
   const advancingRef = useRef(false);
+
+  // Capture-phase state
+  const [pitchBaselineDeg, setPitchBaselineDeg] = useState<number | undefined>(undefined);
+  const finalisedRef = useRef(false);
+  const continuityBrokenRef = useRef(false);
+  const lastFaceSeenRef = useRef(0);
+  const captureModeRef = useRef(captureMode);
+  captureModeRef.current = captureMode;
+
+  const align = useCenteredCapture(videoRef, {
+    gates: { ...captureGates, ...ALIGN_GATE_OVERRIDES },
+    holdMs: 400,
+    timeoutMs: 10000,
+    mirror: false,
+    format: "image/jpeg",
+    encodeQuality: 0.9,
+  });
+
+  // Session identity and the artefacts a retry needs. Kept in refs because they
+  // are read from timers and effect callbacks that would otherwise close over a
+  // stale render.
+  const sessionIdRef = useRef<string>("");
+  const sessionStartRef = useRef<Date | null>(null);
+  const alignFrameRef = useRef<CapturedFrame | undefined>(undefined);
+  const captureFrameRef = useRef<CapturedFrame | undefined>(undefined);
+  const captureRetriesRef = useRef(0);
+
+  const verification = useVerification({
+    onVerify,
+    maxAttempts,
+    timeoutMs: verifyTimeoutMs,
+    onSettled,
+  });
+
+  const capture = useCenteredCapture(videoRef, {
+    gates: captureGates,
+    holdMs: captureHoldMs,
+    timeoutMs: captureTimeoutMs,
+    mirror: false,
+    cropToFace,
+    format: "image/jpeg",
+    encodeQuality: 0.9,
+    pitchBaselineDeg,
+  });
+
+  // Referenced from timers and RAF callbacks, which would otherwise close over
+  // a stale render. The rest of this component already uses this pattern.
+  const phaseCtl = useRef({ startCapture: capture.start, cancelAll: () => {} });
+  useEffect(() => {
+    phaseCtl.current = {
+      startCapture: capture.start,
+      cancelAll: () => {
+        align.cancel();
+        capture.cancel();
+      },
+    };
+  }, [capture.start, capture.cancel, align.cancel]);
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
@@ -493,6 +708,13 @@ export function LivenessCheck({
     }
   };
 
+  const clearPendingAdvance = () => {
+    if (advanceTimeoutRef.current) {
+      clearTimeout(advanceTimeoutRef.current);
+      advanceTimeoutRef.current = null;
+    }
+  };
+
   const advanceChallenge = useCallback(
     (passed: boolean, elapsed: number) => {
       // Guard: the RAF loop fires at ~60fps so advanceChallenge can be called
@@ -502,6 +724,7 @@ export function LivenessCheck({
       advancingRef.current = true;
 
       clearTimer();
+      clearPendingAdvance();
 
       const idx = currentIndexRef.current;
       const challenge = challengesRef.current[idx];
@@ -531,25 +754,43 @@ export function LivenessCheck({
       const allResults = [...resultsRef.current, result];
       setResults(allResults);
 
-      setTimeout(
+      advanceTimeoutRef.current = setTimeout(
         () => {
+          advanceTimeoutRef.current = null;
           const nextIdx = idx + 1;
 
           if (nextIdx >= challengesRef.current.length) {
-            // Session complete — derive pass/fail from the full authoritative list
+            // Challenges done — derive pass/fail from the full authoritative list
             const sessionPassed = allResults.every((r) => r.passed);
+
+            // Liveness passed: hand off to the frontal capture gate rather than
+            // grabbing whatever pose the last challenge left the user in.
+            if (sessionPassed && captureModeRef.current === "centeredFace") {
+              setStatus("capturing");
+              statusRef.current = "capturing";
+              // Continuity is only tracked from here on. Watching it during the
+              // challenges would false-positive constantly, since TURN
+              // challenges legitimately rotate the face out of detection.
+              lastFaceSeenRef.current = Date.now();
+              continuityBrokenRef.current = false;
+              audio.announceChallenge("Look straight at the camera");
+              phaseCtl.current.startCapture();
+              return;
+            }
+
             setStatus(sessionPassed ? "complete" : "failed");
             statusRef.current = sessionPassed ? "complete" : "failed";
             setCompletedAt(new Date());
 
             // Capture the frame while the video is still live. Useful on failure
             // too — it's evidence for fraud review.
-            const frame = videoRef.current
-              ? captureFrame(videoRef.current, {
-                  format: "image/jpeg",
-                  quality: 0.88,
-                })
-              : null;
+            const frame =
+              videoRef.current && captureModeRef.current !== "off"
+                ? captureFrame(videoRef.current, {
+                    format: "image/jpeg",
+                    quality: 0.88,
+                  })
+                : null;
 
             if (sessionPassed) {
               audio.announceComplete();
@@ -557,6 +798,7 @@ export function LivenessCheck({
               audio.announceFail();
             }
 
+            finalisedRef.current = true;
             onComplete?.(sessionPassed, allResults, frame ?? undefined);
             // No unlock needed — session is over
           } else {
@@ -606,26 +848,53 @@ export function LivenessCheck({
   );
 
   const handleResult = useCallback(
-    ({
-      blendshapes,
-      faceDetected: fd,
-    }: {
-      blendshapes: BlendshapeMap;
-      faceDetected: boolean;
-      landmarks: { x: number; y: number; z: number }[];
-    }) => {
+    (result: FaceLandmarkerResult) => {
+      const { blendshapes, faceDetected: fd } = result;
       setFaceDetected(fd);
 
-      if (statusRef.current !== "detecting") return;
+      const phase = statusRef.current;
+
+      if (phase === "aligning") {
+        align.submit(result);
+        return;
+      }
+
+      if (phase === "capturing") {
+        // Swap guard: the face must remain continuously tracked from the end of
+        // the challenges through to the photo.
+        const now = Date.now();
+        if (fd) {
+          lastFaceSeenRef.current = now;
+        } else if (now - lastFaceSeenRef.current > maxTrackingGapMs) {
+          continuityBrokenRef.current = true;
+        }
+        capture.submit(result);
+        return;
+      }
+
+      if (phase !== "detecting") return;
 
       const idx = currentIndexRef.current;
       const challenge = challengesRef.current[idx];
       if (!challenge || !fd) return;
 
-      const allMatch = challenge.blendshapes.every(({ key, threshold }) => {
+      const allMatch = challenge.blendshapes.every(({ key, threshold, compare }) => {
         const score = blendshapes[key] ?? 0;
-        // Negative threshold means "score must be below threshold" (e.g. TURN_RIGHT headYaw)
-        return threshold < 0 ? score < threshold : score > threshold;
+        // Default infers direction from the threshold's sign, which is the
+        // original behaviour (e.g. TURN_RIGHT headYaw uses a negative threshold
+        // to mean "below"). Band comparisons must be explicit — the inference
+        // cannot represent them.
+        const mode = compare ?? (threshold < 0 ? "below" : "above");
+        switch (mode) {
+          case "below":
+            return score < threshold;
+          case "absBelow":
+            return Math.abs(score) < Math.abs(threshold);
+          case "absAbove":
+            return Math.abs(score) > Math.abs(threshold);
+          default:
+            return score > threshold;
+        }
       });
 
       if (allMatch) {
@@ -633,7 +902,7 @@ export function LivenessCheck({
         advanceChallenge(true, elapsed);
       }
     },
-    [advanceChallenge],
+    [advanceChallenge, align.submit, capture.submit, maxTrackingGapMs],
   );
 
   const {
@@ -653,6 +922,15 @@ export function LivenessCheck({
     setResults([]);
     resultsRef.current = [];
     advancingRef.current = false;
+    finalisedRef.current = false;
+    continuityBrokenRef.current = false;
+    captureRetriesRef.current = 0;
+    alignFrameRef.current = undefined;
+    captureFrameRef.current = undefined;
+    sessionIdRef.current = newSessionId();
+    sessionStartRef.current = new Date();
+    verification.reset();
+    setPitchBaselineDeg(undefined);
     setCurrentIndex(0);
     currentIndexRef.current = 0;
     setChallengePassed(false);
@@ -664,15 +942,138 @@ export function LivenessCheck({
   }, [startCamera, numberOfChallenge, challengePool]);
 
   useEffect(() => {
-    if (isCameraReady && !isModelLoading && status === "waiting") {
-      startDetection();
+    if (!(isCameraReady && !isModelLoading && status === "waiting")) return;
+
+    startDetection();
+
+    if (alignPhase && captureMode === "centeredFace") {
+      setStatus("aligning");
+      statusRef.current = "aligning";
+      align.start();
+    } else {
       startChallenge(0);
     }
-  }, [isCameraReady, isModelLoading, status, startDetection, startChallenge]);
+  }, [
+    isCameraReady,
+    isModelLoading,
+    status,
+    startDetection,
+    startChallenge,
+    alignPhase,
+    captureMode,
+    align.start,
+  ]);
+
+  // Alignment settled — record the per-device pitch baseline and the framing
+  // frame, then start the challenges. Alignment never blocks: if it times out
+  // the session proceeds without a baseline and the pitch gate falls back to an
+  // absolute check. Framing is not a liveness requirement.
+  useEffect(() => {
+    if (statusRef.current !== "aligning") return;
+    if (align.state !== "captured" && align.state !== "timeout") return;
+
+    const baseline = align.result?.quality?.pose?.pitchDeg;
+    if (baseline !== undefined) setPitchBaselineDeg(baseline);
+    if (align.result) {
+      alignFrameRef.current = align.result;
+      onAlignCapture?.(align.result);
+    }
+
+    setStatus("detecting");
+    statusRef.current = "detecting";
+    startChallenge(0);
+  }, [align.state, align.result, onAlignCapture, startChallenge]);
+
+  // Capture settled — this is the session's real terminal transition.
+  useEffect(() => {
+    if (statusRef.current !== "capturing") return;
+    if (capture.state !== "captured" && capture.state !== "timeout") return;
+    if (finalisedRef.current) return;
+    finalisedRef.current = true;
+
+    const frame = capture.result ?? undefined;
+    const swapped = continuityGuard && continuityBrokenRef.current;
+
+    setCompletedAt(new Date());
+
+    if (swapped) {
+      setStatus("failed");
+      statusRef.current = "failed";
+      audio.announceFail();
+      onComplete?.(false, resultsRef.current, frame);
+      return;
+    }
+
+    captureFrameRef.current = frame;
+    if (frame) onCapture?.(frame);
+
+    // onComplete has always meant "the liveness stage resolved", and still does.
+    // The backend verdict is reported separately via onSettled, so adding
+    // verification does not change this callback's contract.
+    onComplete?.(true, resultsRef.current, frame);
+
+    if (onVerify && frame) {
+      setStatus("verifying");
+      statusRef.current = "verifying";
+      verification.submit({
+        sessionId: sessionIdRef.current,
+        results: resultsRef.current,
+        frame,
+        alignFrame: alignFrameRef.current,
+        startedAt: sessionStartRef.current ?? new Date(),
+        completedAt: new Date(),
+      });
+      return;
+    }
+
+    setStatus("complete");
+    statusRef.current = "complete";
+    audio.announceComplete();
+  }, [
+    capture.state,
+    capture.result,
+    continuityGuard,
+    onCapture,
+    onComplete,
+    onVerify,
+    verification.submit,
+  ]);
+
+  // Backend verdict settled — the session's true terminal transition when
+  // onVerify is supplied.
+  useEffect(() => {
+    if (statusRef.current !== "verifying") return;
+
+    const next =
+      verification.state === "verified"
+        ? "complete"
+        : verification.state === "rejected"
+          ? "rejected"
+          : verification.state === "error"
+            ? "error"
+            : null;
+    if (!next) return;
+
+    setStatus(next);
+    statusRef.current = next;
+    setCompletedAt(new Date());
+
+    if (next === "complete") audio.announceComplete();
+    else audio.announceFail();
+  }, [verification.state]);
 
   const handleReset = useCallback(() => {
     clearTimer();
+    clearPendingAdvance();
     advancingRef.current = false;
+    finalisedRef.current = false;
+    continuityBrokenRef.current = false;
+    captureRetriesRef.current = 0;
+    alignFrameRef.current = undefined;
+    captureFrameRef.current = undefined;
+    setPitchBaselineDeg(undefined);
+    phaseCtl.current.cancelAll();
+    verification.reset();
     audio.stop();
     stopDetection();
     stopCamera();
@@ -687,6 +1088,46 @@ export function LivenessCheck({
     setFaceDetected(false);
   }, [stopDetection, stopCamera]);
 
+  // Retake the photo without re-running the challenges. Only reachable after a
+  // `low_quality` rejection, and capped by maxCaptureRetries — each one yields
+  // another photo off a single liveness proof.
+  //
+  // This depends on the camera and face tracking having stayed live through the
+  // backend call. Releasing them and restarting would break the continuity
+  // chain, turning the retry into exactly the swap window the guard exists to
+  // close, so the camera is deliberately NOT stopped during `verifying`.
+  const handleRetakePhoto = useCallback(() => {
+    if (captureRetriesRef.current >= maxCaptureRetries) return;
+    captureRetriesRef.current += 1;
+
+    finalisedRef.current = false;
+    continuityBrokenRef.current = false;
+    lastFaceSeenRef.current = Date.now();
+    verification.reset();
+
+    setStatus("capturing");
+    statusRef.current = "capturing";
+    audio.announceChallenge("Look straight at the camera");
+    phaseCtl.current.startCapture();
+  }, [maxCaptureRetries, verification.reset]);
+
+  /** Resubmit the same frame after a transport failure. */
+  const handleResubmit = useCallback(() => {
+    const frame = captureFrameRef.current;
+    if (!frame) return;
+
+    setStatus("verifying");
+    statusRef.current = "verifying";
+    verification.submit({
+      sessionId: sessionIdRef.current,
+      results: resultsRef.current,
+      frame,
+      alignFrame: alignFrameRef.current,
+      startedAt: sessionStartRef.current ?? new Date(),
+      completedAt: new Date(),
+    });
+  }, [verification.submit]);
+
   const handleCancel = useCallback(() => {
     if (onCancel) {
       onCancel();
@@ -698,6 +1139,8 @@ export function LivenessCheck({
   useEffect(
     () => () => {
       clearTimer();
+      clearPendingAdvance();
+      phaseCtl.current.cancelAll();
       stopDetection();
       audio.stop();
     },
@@ -705,31 +1148,69 @@ export function LivenessCheck({
   );
 
   const isComplete = status === "complete";
-  const isFailed = status === "failed";
+  const isRejected = status === "rejected";
+  const isError = status === "error";
+  const isFailed = status === "failed" || isRejected || isError;
   const isDone = isComplete || isFailed;
-  const isActive = status === "detecting" || status === "waiting";
+  const isAligning = status === "aligning";
+  const isCapturing = status === "capturing";
+  const isActive =
+    status === "detecting" || status === "waiting" || isAligning || isCapturing;
   const currentChallenge = challenges[currentIndex];
-  const allPassed = isDone && results.every((r) => r.passed);
+  // What the primary button should do on a terminal failure. The hook decides
+  // the scope; the component additionally refuses a capture-only retry once
+  // maxCaptureRetries is spent, so a single liveness proof cannot be milked for
+  // an unbounded number of photos.
+  const retryAction =
+    verification.retryScope === "capture" && captureRetriesRef.current >= maxCaptureRetries
+      ? "session"
+      : verification.retryScope;
+
+  // `failed` and `rejected` are the user's problem to fix; `error` is ours.
+  // Painting a service outage in the same red as a rejected identity reads as
+  // an accusation, and pushes people to retry something that is not their fault.
+  const terminalTone: "success" | "danger" | "warning" = isComplete
+    ? "success"
+    : isError
+      ? "warning"
+      : "danger";
+  const toneColor =
+    terminalTone === "success"
+      ? "var(--live-success, #6ee7c4)"
+      : terminalTone === "warning"
+        ? "var(--live-warning, #ff8f73)"
+        : "var(--live-danger, #ff8f73)";
+
+  const gatePhaseActive = isAligning || isCapturing;
+  const gatesPassing = gatePhaseActive
+    ? (isCapturing ? capture.evaluation : align.evaluation)?.passedGates === true
+    : false;
+  // Liveness verdict only. `isComplete` is the authority on the session outcome
+  // now that the capture phase sits between the last challenge and the end.
+  const allPassed = isComplete;
   const progressPct = currentChallenge
     ? ((currentChallenge.timeoutMs - timeRemaining) /
         currentChallenge.timeoutMs) * 100
     : 0;
 
   // Progress ring: 0 while idle/waiting, live per-challenge progress while
-  // detecting, full on success, and the PASSED fraction on failure — using the
-  // attempted fraction instead would draw a full ring on a failed session.
+  // detecting, hold progress during the capture gate, full on success, and the
+  // PASSED fraction on failure — using the attempted fraction instead would draw
+  // a full ring on a failed session.
   const ringProgress = isDone
     ? allPassed
       ? 1
       : challenges.length
         ? results.filter((r) => r.passed).length / challenges.length
         : 0
-    : status === "detecting"
-      ? progressPct / 100
-      : 0;
-  const ringColor = isFailed
-    ? "var(--live-danger, #ff8f73)"
-    : "var(--live-primary, #6ee7c4)";
+    : isCapturing
+      ? capture.holdProgress
+      : isAligning
+        ? align.holdProgress
+        : status === "detecting"
+          ? progressPct / 100
+          : 0;
+  const ringColor = isDone ? toneColor : "var(--live-primary, #6ee7c4)";
   const ringOffset =
     RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, ringProgress)));
 
@@ -742,17 +1223,44 @@ export function LivenessCheck({
     headlineSubtitle = isCameraReady
       ? "Preparing face detection…"
       : "Waiting for camera permission…";
+  } else if (isAligning) {
+    headlineTitle = "Center your face";
+    // The gate knows exactly which check is failing, so say that rather than
+    // leaving the user to guess why nothing is happening.
+    headlineSubtitle = align.nudge ?? "Hold still…";
   } else if (status === "detecting" && currentChallenge) {
     headlineTitle = currentChallenge.instruction;
     headlineSubtitle = faceDetected
       ? `Step ${currentIndex + 1} of ${challenges.length}`
       : "Center your face inside the ring";
+  } else if (isCapturing) {
+    headlineTitle = "Look straight at the camera";
+    headlineSubtitle = capture.nudge ?? "Hold still — taking your photo";
+  } else if (status === "verifying") {
+    headlineTitle = "Checking…";
+    // Consumer-supplied stage beats a generic label: a 20s wait with no
+    // explanation reads as a hang.
+    headlineSubtitle = verification.stage ?? "Confirming your identity";
   } else if (isComplete) {
     headlineTitle = "You're verified";
     headlineSubtitle = `${results.length} challenge${results.length === 1 ? "" : "s"} completed`;
-  } else if (isFailed) {
+  } else if (isRejected) {
+    headlineTitle = "Not verified";
+    headlineSubtitle =
+      (verification.verdict?.status === "rejected" && verification.verdict.message) ||
+      (verification.attemptsExhausted
+        ? "No attempts remaining"
+        : "We could not confirm your identity");
+  } else if (isError) {
+    headlineTitle = "Something went wrong";
+    headlineSubtitle =
+      (verification.verdict?.status === "error" && verification.verdict.message) ||
+      "We could not complete the check. Please try again.";
+  } else if (status === "failed") {
     headlineTitle = "Verification failed";
-    headlineSubtitle = "Some challenges were not completed in time";
+    headlineSubtitle = continuityBrokenRef.current
+      ? "Face tracking was lost before the photo was taken"
+      : "Some challenges were not completed in time";
   }
 
   const mergedStyles = {
@@ -789,15 +1297,38 @@ export function LivenessCheck({
     fallbackLink: { ...defaultStyles.fallbackLink, ...customStyles?.fallbackLink },
   };
 
-  // Success only: the row is styled in the accent colour, which reads as a
-  // pass — showing it under a failed check is contradictory.
+  // Only on a true pass. The row is styled in the accent colour and names a
+  // person, so it reads as "this is confirmed who they are" — which is a claim
+  // only the backend can make. `isComplete` now means verified when onVerify is
+  // supplied, so this gate is on the backend verdict rather than on liveness.
   const showIdentityRow =
     isComplete && (employeeName || employeeId || completedAt);
+
+  // Without a backend there is nothing confirming the person is who the props
+  // say they are — liveness proves a live human, never an identity.
+  useEffect(() => {
+    if (IS_PRODUCTION) return;
+    if (!onVerify && (employeeName || employeeId)) {
+      console.warn(
+        "[LivenessCheck] employeeName/employeeId are displayed on success, but no " +
+          "`onVerify` is set. Liveness proves a live person, not which person — " +
+          "the component will name someone it has not verified. Pass `onVerify` " +
+          "to check the capture against your records.",
+      );
+    }
+  }, [onVerify, employeeName, employeeId]);
   const showVideo = isCameraReady && !isDone;
 
   return (
-    <div className={className} style={{ ...themeVars, ...mergedStyles.root }}>
-      <style>{INJECTED_STYLES}</style>
+    <div
+      className={className}
+      style={{ ...themeVars, ...mergedStyles.root }}
+      data-liveness-root=""
+      data-liveness-status={status}
+      role="region"
+      aria-label={ariaLabel}
+    >
+      <style>{(loadFonts ? FONT_IMPORT : "") + INJECTED_STYLES}</style>
 
       {/* Header — brand on the left, organization pill on the right */}
       <header style={mergedStyles.header}>
@@ -805,11 +1336,8 @@ export function LivenessCheck({
           <span
             style={{
               ...mergedStyles.statusDot,
-              ...(isFailed
-                ? {
-                    background: "var(--live-danger, #ff8f73)",
-                    boxShadow: "0 0 12px var(--live-danger, #ff8f73)",
-                  }
+              ...(isDone
+                ? { background: toneColor, boxShadow: `0 0 12px ${toneColor}` }
                 : {}),
             }}
           />
@@ -821,8 +1349,8 @@ export function LivenessCheck({
 
       {/* Errors */}
       {(cameraError || modelError) && (
-        <div style={mergedStyles.errorBanner}>
-          <CircleAlert size={16} style={{ flex: "none" }} />
+        <div style={mergedStyles.errorBanner} role="alert">
+          <CircleAlert size={16} style={{ flex: "none" }} aria-hidden="true" />
           <span>{cameraError || modelError}</span>
         </div>
       )}
@@ -876,6 +1404,7 @@ export function LivenessCheck({
               }}
               playsInline
               muted
+              aria-label="Camera preview"
             />
 
             {/* Face guide + live badge, while the camera is actually running */}
@@ -890,8 +1419,21 @@ export function LivenessCheck({
                           animation: "liveness-pulse 1.5s infinite",
                         }
                       : {}),
-                    ...(challengePassed
+                    // During the gated phases the guide tracks the gate itself:
+                    // solid once every check passes, amber while something is
+                    // still failing. Users cannot correct a failure they cannot
+                    // see, and this is the difference between a first-try pass
+                    // and a confused timeout.
+                    ...(gatePhaseActive && !gatesPassing
                       ? {
+                          borderStyle: "dashed",
+                          borderColor: "var(--live-warning, #ff8f73)",
+                          animation: "none",
+                        }
+                      : {}),
+                    ...(challengePassed || (gatePhaseActive && gatesPassing)
+                      ? {
+                          borderStyle: "solid",
                           borderColor: "var(--live-success, #6ee7c4)",
                           backgroundColor:
                             "color-mix(in srgb, var(--live-success, #6ee7c4) 15%, transparent)",
@@ -917,7 +1459,7 @@ export function LivenessCheck({
             {/* Idle */}
             {status === "idle" && (
               <div style={mergedStyles.centerOverlay}>
-                <Camera size={44} strokeWidth={1.5} />
+                <Camera size={44} strokeWidth={1.5} aria-hidden="true" />
                 <span
                   style={{
                     ...mergedStyles.stateLabel,
@@ -935,6 +1477,7 @@ export function LivenessCheck({
                 <LoaderCircle
                   size={40}
                   strokeWidth={1.5}
+                  aria-hidden="true"
                   style={{ animation: "liveness-spin 1s linear infinite" }}
                 />
               </div>
@@ -964,35 +1507,48 @@ export function LivenessCheck({
                   </svg>
                 ) : (
                   <svg width="80" height="80" viewBox="0 0 86 86" aria-hidden="true">
-                    <circle
-                      cx="43"
-                      cy="43"
-                      r="38"
-                      fill="none"
-                      stroke="var(--live-danger, #ff8f73)"
-                      strokeWidth="4.5"
-                    />
+                    <circle cx="43" cy="43" r="38" fill="none" stroke={toneColor} strokeWidth="4.5" />
                     <line
                       x1="43"
                       y1="26"
                       x2="43"
                       y2="48"
-                      stroke="var(--live-danger, #ff8f73)"
+                      stroke={toneColor}
                       strokeWidth="6"
                       strokeLinecap="round"
                     />
-                    <circle cx="43" cy="60" r="3.4" fill="var(--live-danger, #ff8f73)" />
+                    <circle cx="43" cy="60" r="3.4" fill={toneColor} />
                   </svg>
                 )}
                 <span
                   style={{
                     ...mergedStyles.stateLabel,
-                    color: allPassed
-                      ? "color-mix(in srgb, var(--live-success, #6ee7c4) 75%, transparent)"
-                      : "color-mix(in srgb, var(--live-danger, #ff8f73) 75%, transparent)",
+                    color: `color-mix(in srgb, ${toneColor} 75%, transparent)`,
                   }}
                 >
-                  {allPassed ? "VERIFIED" : "NOT VERIFIED"}
+                  {allPassed ? "VERIFIED" : isError ? "CHECK FAILED" : "NOT VERIFIED"}
+                </span>
+              </div>
+            )}
+
+            {/* Backend verdict in flight — the camera stays live behind this so
+                a low_quality rejection can retake the photo without breaking
+                the tracking-continuity chain. */}
+            {status === "verifying" && (
+              <div style={mergedStyles.centerOverlay}>
+                <LoaderCircle
+                  size={40}
+                  strokeWidth={1.5}
+                  aria-hidden="true"
+                  style={{ animation: "liveness-spin 1s linear infinite" }}
+                />
+                <span
+                  style={{
+                    ...mergedStyles.stateLabel,
+                    color: "rgba(255, 255, 255, 0.5)",
+                  }}
+                >
+                  CHECKING
                 </span>
               </div>
             )}
@@ -1003,8 +1559,17 @@ export function LivenessCheck({
         </div>
       </section>
 
-      {/* Headline — the instruction lives below the ring, per the design */}
-      <div style={mergedStyles.headline} key={instructionKey}>
+      {/* Headline — the instruction lives below the ring, per the design.
+          This is the component's entire spoken interface: every instruction,
+          gate nudge and verdict passes through it, so it is the live region.
+          Without this a screen-reader user gets a camera and silence. */}
+      <div
+        style={mergedStyles.headline}
+        key={instructionKey}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <div style={mergedStyles.headlineTitle}>{headlineTitle}</div>
         <p style={mergedStyles.headlineSubtitle}>{headlineSubtitle}</p>
       </div>
@@ -1085,19 +1650,34 @@ export function LivenessCheck({
         </div>
       )}
 
-      {/* Primary action */}
+      {/* Primary action — the retry it offers matches what actually needs
+          redoing. Sending someone through the full challenge sequence again to
+          fix a blurry photo, or silently re-photographing them after the
+          backend judged the person, would both be wrong. */}
       {(status === "idle" || isDone) && (
         <div style={mergedStyles.actionWrapper}>
           <button
             type="button"
             style={mergedStyles.actionButton}
-            onClick={status === "idle" ? handleStart : handleReset}
+            onClick={
+              status === "idle"
+                ? handleStart
+                : retryAction === "capture"
+                  ? handleRetakePhoto
+                  : retryAction === "resubmit"
+                    ? handleResubmit
+                    : handleReset
+            }
           >
             {status === "idle"
               ? "Start Verification"
               : allPassed
                 ? "Done"
-                : "Try again"}
+                : retryAction === "capture"
+                  ? "Retake photo"
+                  : retryAction === "resubmit"
+                    ? "Try again"
+                    : "Start over"}
           </button>
         </div>
       )}
@@ -1106,6 +1686,13 @@ export function LivenessCheck({
       {isActive && (
         <button type="button" style={mergedStyles.cancelLink} onClick={handleCancel}>
           Cancel
+        </button>
+      )}
+      {/* A capture-only retry is still a full restart away from being exhausted,
+          so the fallback is offered alongside it rather than instead of it. */}
+      {isFailed && retryAction !== "session" && retryAction !== "none" && (
+        <button type="button" style={mergedStyles.cancelLink} onClick={handleReset}>
+          Start over instead
         </button>
       )}
       {isFailed && onFallback && (

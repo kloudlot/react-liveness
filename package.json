@@ -1,6 +1,6 @@
 {
   "name": "@kloudlot/react-liveness",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "Headless React liveness check component using MediaPipe face detection",
   "keywords": [
     "liveness",
@@ -23,12 +23,15 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.dev.json",
+    "playground": "esbuild dev/calibrate.ts dev/demo.tsx --bundle --format=esm --jsx=automatic --outdir=dev --servedir=dev --serve=127.0.0.1:8000",
+    "calibrate": "npm run playground",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {

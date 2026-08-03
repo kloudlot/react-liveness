@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Liveness — threshold calibration</title>
+<style>
+  :root {
+    --bg: #0c0e13;
+    --surface: #12161a;
+    --border: rgba(255,255,255,.1);
+    --text: #f4f7f5;
+    --muted: #8f9d97;
+    --accent: #6ee7c4;
+    --warn: #ff8f73;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .12em;
+       color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .lede { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--border);
+           border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  video { width: 100%; border-radius: 12px; background: #000; transform: scaleX(-1); display: block; }
+  button {
+    background: var(--accent); color: #06231b; border: 0; border-radius: 9px;
+    padding: 8px 14px; font-weight: 600; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .status { font-family: ui-monospace, monospace; font-size: 12px; padding: 8px 12px;
+            border-radius: 9px; border: 1px solid var(--border); margin-bottom: 16px; }
+  .status.ok   { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+  .status.warn { color: var(--warn);   border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+  .row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0;
+         font-family: ui-monospace, monospace; font-size: 12px; }
+  .row .k { color: var(--muted); flex: 1; }
+  .row .v { font-variant-numeric: tabular-nums; }
+  .row .tag { font-size: 9px; text-transform: uppercase; letter-spacing: .1em;
+              color: var(--muted); border: 1px solid var(--border);
+              padding: 1px 6px; border-radius: 20px; }
+  .empty { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; padding: 8px 0; }
+  .scenario { border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; margin-bottom: 9px; }
+  .scenario.have { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .scenario.bad  { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .scenario code.bad { color: var(--warn); }
+  .scenario-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .scenario p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+  .scenario code { display: inline-block; margin-top: 7px; font-size: 11px; color: var(--accent); }
+  textarea {
+    width: 100%; min-height: 380px; background: #0a0c10; color: var(--text);
+    border: 1px solid var(--border); border-radius: 11px; padding: 13px;
+    font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.55; resize: vertical;
+  }
+</style>
+</head>
+<body>
+
+<h1>Liveness — threshold calibration</h1>
+<p class="lede">
+  Measures head pose and frame quality on this device using the exact production
+  detection config, then emits the constants to paste into
+  <code>facePose.ts</code>, <code>frameQuality.ts</code> and the capture gate.
+  Record every scenario, then hit Derive.
+</p>
+
+<div class="actions">
+  <button id="start">Start camera</button>
+  <button id="derive" class="ghost">Derive thresholds</button>
+  <button id="copy" class="ghost">Copy output</button>
+  <button id="reset" class="ghost">Clear samples</button>
+</div>
+
+<div id="status" class="status">Idle</div>
+
+<div class="grid">
+  <div>
+    <div class="panel"><video id="video" playsinline muted></video></div>
+    <div class="panel">
+      <h2>Live metrics</h2>
+      <div id="readout"><div class="empty">Not started</div></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>1 · Sign calibration</h2>
+      <p class="lede" style="margin:0 0 12px;font-size:12.5px">
+        Hold the pose, then click Capture. The matrix is in unmirrored camera
+        space while the preview is mirrored, so signs must be observed, not assumed.
+      </p>
+      <div id="signs"></div>
+    </div>
+
+    <div class="panel">
+      <h2>2 · Scenario samples</h2>
+      <p class="lede" style="margin:0 0 12px;font-size:12.5px">
+        Each records 6 seconds. Thresholds are bracketed between the case you
+        want accepted and the case you want rejected, so each scenario must move
+        <em>one</em> metric decisively — samples that don’t are flagged on the spot.
+      </p>
+      <div id="scenarios"></div>
+    </div>
+
+    <div class="panel">
+      <h2>3 · Output</h2>
+      <textarea id="output" spellcheck="false" placeholder="Record samples, then click Derive thresholds."></textarea>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/calibrate.js"></script>
+</body>
+</html>
