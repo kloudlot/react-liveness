@@ -656,6 +656,8 @@ export function LivenessCheck({
   const alignFrameRef = useRef<CapturedFrame | undefined>(undefined);
   const captureFrameRef = useRef<CapturedFrame | undefined>(undefined);
   const captureRetriesRef = useRef(0);
+  /** Set when the capture phase ended with no usable frame at all. */
+  const captureFailedRef = useRef(false);
 
   const verification = useVerification({
     onVerify,
@@ -925,6 +927,7 @@ export function LivenessCheck({
     finalisedRef.current = false;
     continuityBrokenRef.current = false;
     captureRetriesRef.current = 0;
+    captureFailedRef.current = false;
     alignFrameRef.current = undefined;
     captureFrameRef.current = undefined;
     sessionIdRef.current = newSessionId();
@@ -1004,15 +1007,44 @@ export function LivenessCheck({
       return;
     }
 
+    // No frame at all means the video produced no pixels — even the ungated
+    // fallback in useCenteredCapture could not draw. There is nothing to submit
+    // and nothing to review, so this cannot be reported as a pass. Previously
+    // this path fell through to "complete", so a session with no photo and no
+    // backend check displayed "You're verified".
+    if (!frame) {
+      captureFailedRef.current = true;
+      setStatus("failed");
+      statusRef.current = "failed";
+      audio.announceFail();
+      onComplete?.(false, resultsRef.current, undefined);
+      return;
+    }
+
     captureFrameRef.current = frame;
-    if (frame) onCapture?.(frame);
+    onCapture?.(frame);
+
+    if (!IS_PRODUCTION && frame.quality && !frame.quality.passedGates) {
+      console.warn(
+        "[LivenessCheck] The capture gate timed out without a frame passing every " +
+          "check, so an ungated best-effort frame was used (quality.passedGates " +
+          "is false). Failing gates: " +
+          (frame.quality.failures.map((f) => f.gate).join(", ") || "unknown") +
+          ". Gate defaults are calibrated per camera — run `npm run calibrate` on " +
+          "this device, or widen `captureGates`.",
+      );
+    }
 
     // onComplete has always meant "the liveness stage resolved", and still does.
     // The backend verdict is reported separately via onSettled, so adding
     // verification does not change this callback's contract.
     onComplete?.(true, resultsRef.current, frame);
 
-    if (onVerify && frame) {
+    // Runs whenever a frame exists, gated or not. Withholding an unusable photo
+    // from the backend would silently skip verification entirely — the backend
+    // is better placed to judge it, and `frame.quality.passedGates` tells it how
+    // much to trust what it received.
+    if (onVerify) {
       setStatus("verifying");
       statusRef.current = "verifying";
       verification.submit({
@@ -1069,6 +1101,7 @@ export function LivenessCheck({
     finalisedRef.current = false;
     continuityBrokenRef.current = false;
     captureRetriesRef.current = 0;
+    captureFailedRef.current = false;
     alignFrameRef.current = undefined;
     captureFrameRef.current = undefined;
     setPitchBaselineDeg(undefined);
@@ -1260,7 +1293,9 @@ export function LivenessCheck({
     headlineTitle = "Verification failed";
     headlineSubtitle = continuityBrokenRef.current
       ? "Face tracking was lost before the photo was taken"
-      : "Some challenges were not completed in time";
+      : captureFailedRef.current
+        ? "We could not take a usable photo. Please try again."
+        : "Some challenges were not completed in time";
   }
 
   const mergedStyles = {

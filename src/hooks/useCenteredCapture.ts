@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { FaceLandmarkerResult, HeadPose } from '../types';
+import type { FaceLandmarkerResult, HeadPose, FaceBox } from '../types';
 import {
   DEFAULT_CAPTURE_GATES,
   type CaptureGates,
@@ -119,6 +119,11 @@ export function useCenteredCapture(
   const bestScoreRef = useRef(-1);
   const bestQualityRef = useRef<CaptureQuality | null>(null);
 
+  // Used only for the timeout fallback below.
+  const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastEvaluationRef = useRef<CaptureQuality | null>(null);
+  const lastGeometryRef = useRef<FaceBox | null>(null);
+
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onCaptureRef = useRef(onCapture);
   useEffect(() => {
@@ -145,18 +150,48 @@ export function useCenteredCapture(
     (reason: 'captured' | 'timeout') => {
       clearTimer();
 
-      const canvas = bestCanvasRef.current;
-      const quality = bestQualityRef.current;
+      let canvas = bestCanvasRef.current;
+      let quality = bestQualityRef.current;
 
-      let frame: CapturedFrame | null = null;
-      if (canvas && quality) {
-        frame = frameFromCanvas(canvas, {
-          format,
-          encodeQuality,
-          mirrored: mirror,
-          captureQuality: quality,
-        });
+      // Fallback: nothing ever cleared every gate, so there is no best frame.
+      //
+      // Returning null here was a real defect — the caller could not tell an
+      // unusable photo from no photo, and a session with no photo would sail
+      // past a backend check that never ran. Gate thresholds are calibrated per
+      // device, so "no frame ever qualified" is an ordinary outcome on hardware
+      // the defaults were not tuned for, not an exceptional one.
+      //
+      // Capture the current frame ungated instead. It carries the failing gates
+      // in `quality.failures` and `passedGates: false`, so the caller can submit
+      // it, reject it, or ask the user to retry on the evidence.
+      if (!canvas || !quality) {
+        const video = videoRef.current;
+        if (video) {
+          if (!fallbackCanvasRef.current) {
+            fallbackCanvasRef.current = document.createElement('canvas');
+          }
+          const drawn = drawVideoFrame(video, fallbackCanvasRef.current, {
+            mirror,
+            crop:
+              cropToFace && lastGeometryRef.current
+                ? { box: lastGeometryRef.current, paddingRatio: cropPadding }
+                : undefined,
+          });
+          if (drawn) {
+            canvas = fallbackCanvasRef.current;
+            quality = lastEvaluationRef.current;
+          }
+        }
       }
+
+      const frame = canvas
+        ? frameFromCanvas(canvas, {
+            format,
+            encodeQuality,
+            mirrored: mirror,
+            ...(quality ? { captureQuality: quality } : {}),
+          })
+        : null;
 
       setResult(frame);
       setPhase(reason);
@@ -164,7 +199,7 @@ export function useCenteredCapture(
 
       if (frame) onCaptureRef.current?.(frame);
     },
-    [format, encodeQuality, mirror],
+    [videoRef, format, encodeQuality, mirror, cropToFace, cropPadding],
   );
 
   const start = useCallback(() => {
@@ -174,6 +209,8 @@ export function useCenteredCapture(
     poseHistoryRef.current = [];
     bestScoreRef.current = -1;
     bestQualityRef.current = null;
+    lastEvaluationRef.current = null;
+    lastGeometryRef.current = null;
     setResult(null);
     setEvaluation(null);
     setHoldProgress(0);
@@ -234,6 +271,8 @@ export function useCenteredCapture(
       );
 
       setEvaluation(verdict);
+      lastEvaluationRef.current = verdict;
+      if (res.geometry) lastGeometryRef.current = res.geometry.box;
 
       if (!verdict.passedGates) {
         // Any failure restarts the hold — a pose has to be sustained, not

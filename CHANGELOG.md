@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+- **`onVerify` never fired when the capture gate timed out, and the session
+  reported success anyway.** If no frame cleared every gate within
+  `captureTimeoutMs`, the capture resolved with no frame at all. The component's
+  `if (onVerify && frame)` guard then silently skipped verification and fell
+  through to `complete` — displaying "You're verified" for a session with no
+  photo and no backend check.
+
+  Gate thresholds are calibrated per camera, so "nothing ever qualified" is an
+  ordinary outcome on hardware the defaults were not tuned for, not an
+  exceptional one. It is now handled as such:
+
+  - On timeout with no qualifying frame, the current frame is captured ungated
+    and returned with `quality.passedGates === false` and the failing gates in
+    `quality.failures`.
+  - `onVerify` runs whenever a frame exists, gated or not. The backend is better
+    placed to judge a marginal photo than the component is, and `passedGates`
+    tells it how much to trust what it received.
+  - If there is genuinely no frame — the video produced no pixels — the session
+    now ends in `failed`. It can no longer report a pass with nothing to show
+    for it.
+  - A development-mode warning names the failing gates and points at
+    `npm run calibrate`.
+
+  If you are on 1.1.0 with an `onVerify` that appeared never to run, this is
+  why, and any session it affected was reported to your user as verified without
+  ever reaching your backend.
+
 ## 1.1.0
 
 Liveness sessions now produce a photo worth comparing, and stop claiming
